@@ -1,0 +1,10 @@
+{application, hex,
+ [
+  {description, "Home Exchange application"},
+  {vsn, git},
+  {registered, [hex]},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]}
+ ]}.
