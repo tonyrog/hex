@@ -8,44 +8,77 @@
 -module(hex_config).
 -compile(export_all).
 
+-include("../include/hex.hrl").
+
+
 scan(Rules) ->
-    case scan(Rules, [],[],[]) of
+    case scan_(Rules, [],[],[], []) of
 	{ok,{Event,Input,Output}} ->
 	    {Event,Input,Output};
 	Error ->
 	    Error
     end.
 
-scan([{event,ID,{App,Flags},Event} | Rules], E, I, O, Err) ->
-    {E1,Err1} = add_event(E, ID, App, Flags, Event, Err),
-    scan(Rules, E1, I, O, Err1);
-scan([{input,ID,{CanID,SubID,Flags,Output}} | Rules], E, I, O, Err) ->
-    {I1,Err1} = add_input(I, ID, CanID, SubID, Flags, Output, Err)
-    scan(Rules, E, I1, E, O, Err1);
-scan([{output,ID,Flags,Actions} | Rules], E, I, O, Err) ->
-    {O1,Err1} = add_output(O, ID, Flags, Actions, Err),
-    scan(Rules, E, I, O1, Err1);
-scan([R | Rules], E, I, O, Err) ->
-    scan(Rules, E, I, O, [{bad_rule,R} | Err]);
-scan([], E, I, O, []) ->
+scan_([R | Rs], E, I, O, Err) ->
+    case R of
+	{event,Label,{App,Flags},Event} ->
+	    {E1,Err1} = add_event(E,Label,App,Flags,Event,Err),
+	    scan_(Rs, E1, I, O, Err1);
+	{input,Label,{ID,Chan,Type,Value,Output}} ->
+	    {I1,Err1} = add_input(I,Label,ID,Chan,Type,Value,Output, Err),
+	    scan_(Rs, E, I1, O, Err1);
+	{output,Label,Flags,Actions} ->
+	    {O1,Err1} = add_output(O,Label,Flags,Actions,Err),
+	    scan_(Rs, E, I, O1, Err1);
+	_ ->
+	    scan_(Rs, E, I, O, [{bad_rule,R} | Err])
+    end;
+scan_([], E, I, O, []) ->
     {ok,{E,I,O}};
-scan([],_E,_I,_O,Err) ->
+scan_([],_E,_I,_O,Err) ->
     {error,Err}.
 
-add_event(E, ID, App, Flags, Event, Err) when 
-      is_integer(ID); is_atom(ID) ->
-    case lists:keyfind(ID, #event_rule.id, E) of
+add_event(E, Label, App, Flags, Sig, Err) ->
+    case lists:keyfind(Label, #hex_event.label, E) of
 	false ->
-	    {[#event_rule { id=ID,
-			    app=App,
-			    flags=Flags,
-			    event=Event } | E], Err};
+	    %% FIXME: transform Sig into internal form,
+	    %% check plugin and let plugin check flags
+	    Event =
+		#hex_event { label=Label,
+			     app=App,
+			     flags=Sig,
+			     signal=gnal },
+	    {[Event | E], Err};
 	_ ->
-	    {E, [{event_already_exist, ID} | Err]}
+	    {E, [{event_already_exist, Label} | Err]}
     end.
 
 
-
-
+add_input(I, Label, ID, Chan, Type, Value, Output, Err) ->
+    case lists:keyfind(Label, #hex_rule.label, I) of
+	false ->
+	    %% FIXME: check and scan all pattern forms
+	    Input = 
+		#hex_rule { label = Label,
+			    id = ID,
+			    chan = Chan,
+			    type = Type,
+			    value = Value,
+			    output = Output },
+	    { [Input|I], Err };
+	_ ->
+	    {I, [{rule_already_exist, Label} | Err]}
+    end.
 	    
-
+add_output(O,Label,Flags,Actions,Err) ->
+    case lists:keyfind(Label, #hex_output.label, O) of
+	false ->
+	    Output =
+		#hex_output { label = Label,
+			      flags = Flags,
+			      actions = Actions 
+			    },
+	    { [Output|O], Err };
+	_ ->
+	    {O, [{output_already_exist, Label} | Err]}
+    end.

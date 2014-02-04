@@ -4,9 +4,11 @@ config() :: event() | input() | output()
 
 #Event processing
 
-	event() :: {event,ID::id(),{App::app(),Flags::[plugin_input_flag()]},
-		        {ID::event_id(),Chan::event_chan(),
-					Type::event_type(),Value::value_pattern()}}
+	event() :: {event,Label::id(),{App::app(),Flags::[plugin_input_flag()]},
+		        {ID::event_id(),
+			     Chan::event_chan(),
+				 Type::event_type(),
+				 Value::value_pattern()}}
 
 	event_id() :: can_id().
 	event_channel() :: subid().
@@ -17,9 +19,12 @@ config() :: event() | input() | output()
 
 #Input processing
 
-	input() :: {input,ID:id(),
-	           {ID::pattern(),Chan::pattern(),Type::pattern(),
-				   [input_flag()],[output_id()]}
+	input() :: {input,Label::id(),
+	           {ID::pattern(),
+			    Chan::pattern(),
+				Type::pattern(),
+				Value::patern(),
+			    [input_flag()],[output_id()]}
 
     input_flag() ::
 		digial |
@@ -38,18 +43,18 @@ config() :: event() | input() | output()
 		{analog_scale, uint8()}
 
 #Output processing
-	output() :: {output,<id>,[output_flag()],[action()]}
+	output() :: {output,Label::id(),[output_flag()],[action()]}
 
 	output_flag() ::
 		{type,digital | analog | interval | puls} |
 		{default, uint32()} |
-		{delay, timer()} |
-	    {rampup, timer()} |
-		{rampdown, timer()} |
-		{sustain, timer()} |
-		{deact, timer()} |
-		{wait, timer()} |
-		{inhbit,timer()} |
+		{delay, timeout()} |
+	    {rampup, timeout()} |
+		{rampdown, timeout()} |
+		{sustain, timeout()} |
+		{deact, timeout()} |
+		{wait, timeout()} |
+		{inhbit,timeout()} |
 		{anself, boolean()} |
 		{ancan, boolean()} |
 
@@ -59,8 +64,10 @@ config() :: event() | input() | output()
 
 #Common types
 
+	id() :: atom() | integer().
+	
 	can_id() :: uint11() | {cob,uint11()} | {cob,func(),ID::uint7()} |
-		{xcob,func(),ID::uint25()} | {xcob,uint29()}
+		{xcob,func(),ID::uint25()} | {xcob,uint29()}.
 	         
 	func() :: nmt | sync | time_stamp |
 		      pdo1\_tx | pdo1\_rx |
