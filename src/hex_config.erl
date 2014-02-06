@@ -46,8 +46,8 @@ add_event(E, Label, App, Flags, Sig, Err) ->
 	    Event =
 		#hex_event { label=Label,
 			     app=App,
-			     flags=Sig,
-			     signal=gnal },
+			     flags=Flags,
+			     signal=Sig },
 	    {[Event | E], Err};
 	_ ->
 	    {E, [{event_already_exist, Label} | Err]}

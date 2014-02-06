@@ -33,11 +33,17 @@ Specification of HomeExchange (Hex) configuration file
       }
 
     input_flag() ::
-		analog_to_digital |
 		springback   |
 		push_encoder |
+	    analog_to_digital |
+	    digital_to_analog |		
+	    on_only  |
+	    off_only |
 		inc_encoder  |
 		dec_encoder  |
+		{encoder_ival, unsigned16()} |
+	    {encoder_pause, unsigned16()} |
+	    {encoder_step,  integer16()} |
 		{analog_min,  unsigned16()} |
 		{analog_max,  unsigned16()} |
 		{analog_offs, integer16() } |

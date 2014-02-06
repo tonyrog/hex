@@ -17,14 +17,19 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
+-export([output/2, input/2]).
+
 -include("../include/hex.hrl").
 
 -define(SERVER, ?MODULE).
+-define(TABLE, hex_table).
 
 -record(state, {
+	  tab :: ets:tab(),
 	  input_rules = [] :: [#hex_rule{}],
 	  output :: [dict()]
 	 }).
+
 
 %%%===================================================================
 %%% API
@@ -56,7 +61,9 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    {ok, #state{ input_rules = [],
+    Tab = ets:new(?TABLE, [named_table]),
+    {ok, #state{ tab = Tab,
+		 input_rules = [],
 		 output = dict:new() }}.
 
 %%--------------------------------------------------------------------
@@ -101,17 +108,7 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info(Signal=#hex_signal{}, State) ->
-    hex_input:run(Signal, State#state.input_rules, 
-		  fun(I, Value) ->
-			  case dict:find({output,I}, State#state.output) of
-			      error -> 
-				  io:format("warning: output ~w not running\n",
-					    [I]),
-				  ignore;
-			      Fsm ->
-				  gen_fms:send_event(Fsm, Value)
-			  end
-		  end),
+    run(Signal, State#state.input_rules),
     {noreply, State};
 
 handle_info(_Info, State) ->
@@ -145,3 +142,75 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+input(I, Value) when is_integer(I); is_atom(I) ->
+    io:format("input ~w ~w\n", [I, Value]),
+    try ets:lookup({input,I}, ?TABLE) of
+	[] ->
+	    io:format("warning: hex_input ~w not running\n", [I]),
+	    ignore;
+	Fsm ->
+	    gen_fms:send_event(Fsm, Value)
+    catch 
+	error:badarg ->
+	    io:format("warning: hex_server not running\n", []),
+	    ignore
+    end.
+
+output(O, Value) when is_integer(O) ->
+    io:format("output ~w ~w\n", [O, Value]),
+    try ets:lookup({output,O}, ?TABLE) of
+	[] -> 
+	    io:format("warning: output ~w not running\n", [O]),
+	    ignore;
+	Fsm ->
+	    gen_fms:send_event(Fsm, Value)
+    catch
+	error:badarg ->
+	    io:format("warning: hex_server not running\n", []),
+	    ignore
+    end.
+
+
+run(Signal, Rules) when is_record(Signal, hex_signal) ->
+    run_(Signal, Rules).
+
+run_(Signal, [Rule|Rules]) ->
+    case match_rule(Signal, Rule) of
+	{true,Value} ->
+	    Src = Signal#hex_signal.source,
+	    V = case Signal#hex_signal.type of
+		    ?HEX_DIGITAL -> {digital,Value,Src};
+		    ?HEX_ANALOG ->  {analog,Value,Src};
+		    ?HEX_ENCODER -> {encoder,Value,Src};
+		    Type -> {Type,Value,Src}
+		end,
+	    input(Rule#hex_rule.label, V),
+	    run_(Signal, Rules);
+	false ->
+	    run_(Signal, Rules)
+    end;
+run_(_Signal, []) ->
+    ok.
+
+match_rule(Signal, Rule) ->
+    case match_(Signal#hex_signal.id, Rule#hex_rule.id) andalso 
+	match_(Signal#hex_signal.chan, Rule#hex_rule.chan) andalso 
+	match_(Signal#hex_signal.type, Rule#hex_rule.type) of
+	true ->
+	    case match_(Signal#hex_signal.value, Rule#hex_rule.value) of
+		true -> {true, Signal#hex_signal.value};
+		false -> false
+	    end;
+	false ->
+	    false
+    end.
+
+match_(A, A) -> true;
+match_({mask,Mask,Match}, A) -> A band Mask =:= Match;
+match_({range,Low,High}, A) -> (A >= Low) andalso (A =< High);
+match_({'not',Cond}, A) -> not match_(Cond,A);
+match_({'and',C1,C2}, A) -> match_(C1,A) andalso match_(C2,A);
+match_({'or',C1,C2}, A) -> match_(C1,A) orelse match_(C2,A);
+match_([Cond|Cs], A) -> match_(Cond,A) andalso match_(Cs, A);
+match_([], _A) -> true.
