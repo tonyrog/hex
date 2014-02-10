@@ -21,7 +21,7 @@ scan(Rules) ->
 
 scan_([R | Rs], E, I, O, Err) ->
     case R of
-	{event,Label,{App,Flags},Event} ->
+	{event,Label,{App,Flags},Event} when is_atom(App) ->
 	    {E1,Err1} = add_event(E,Label,App,Flags,Event,Err),
 	    scan_(Rs, E1, I, O, Err1);
 	{input,Label,{ID,Chan,Type,Value,Output}} ->

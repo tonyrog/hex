@@ -2,7 +2,7 @@
 %%% @author Tony Rogvall <tony@rogvall.se>
 %%% @copyright (C) 2014, Tony Rogvall
 %%% @doc
-%%%    HEX input processor - keep minimal state 
+%%%    HEX input processor
 %%% @end
 %%% Created :  6 Feb 2014 by Tony Rogvall <tony@rogvall.se>
 %%%-------------------------------------------------------------------
@@ -24,35 +24,59 @@
 
 -define(SERVER, ?MODULE).
 
+-define(UPPER_LIMIT_EXCEEDED,                16#01).
+-define(BELOW_LOWER_LIMIT,                   16#02).
+-define(CHANGED_BY_MORE_THAN_DELTA,          16#04).
+-define(CHANGED_BY_MORE_THAN_NEGATIVE_DELTA, 16#08).
+-define(CHANGED_BY_MORE_THAN_POSITIVE_DELTA, 16#10).
+-define(LIMIT_BITS, 16#03).
+-define(DELTA_BITS, 16#1C).
+
 -record(opt,
 	{
 	  on_only    = false  :: boolean(),
 	  off_only   = false  :: boolean(),
 	  springback = false  :: boolean(),
+	  analog_to_digital = false :: boolean(),
+	  digital_to_analog = false :: boolean(),
+	  %% encoder config
 	  push_encoder = false :: boolean(),
 	  inc_encoder = false  :: boolean(),
 	  dec_encoder = false  :: boolean(),
-	  analog_to_digital = false :: boolean(),
-	  digital_to_analog = false :: boolean(),
-	  encoder_ival  = 250 :: unsigned16(),
-	  encoder_pause = 3000 :: unsigned16(),
-	  encoder_step = 1 :: integer16(),
-	  analog_min = 0 :: unsigned16(),
-	  analog_max = 16#ffff :: unsigned16(),
-	  analog_offs = 0  :: integer16(),
-	  %% stored as fixpoint 8.8, input is integer or float!
-	  analog_scale = 16#0100 :: unsigned16(),
-	  outputs = [] :: [unsigned8()]
+	  encoder_ival  = 250 :: uint32(),
+	  encoder_pause = 3000 :: uint32(),
+	  encoder_step = 1 :: int32(),
+	  %% analog config
+	  analog_trigger = 0 :: uint8(),
+	  analog_delta = 1 :: uint32(),
+	  analog_negative_delta = 1 :: uint32(),
+	  analog_positive_delta = 1 :: uint32(),
+	  analog_max_frequency = 0  :: float(),
+	  inhibit_us = 0 :: uint32(),  %% derived from max_frequency
+	  analog_upper_limit = 16#ffff :: int32(),
+	  analog_lower_limit = 16#0000 :: int32(),
+	  analog_min = 0 :: int32(),
+	  analog_max = 16#ffff :: int32(),
+	  analog_offs = 0  :: int32(),
+	  analog_scale = 1.0 :: float(),
+	  %% rfid config
+	  rfid_match = 0 :: uint32(),
+	  rfid_mask  = 0 :: uint32(),
+	  rfid_match_to_digital :: boolean(),
+	  outputs = [] :: [uint8()]
 	}).
 
 -record(s,
 	{
 	  id           :: atom() | integer(),
-	  value = 0    :: unsigned32(),         %% last value
+	  value = 0    :: uint32(),             %% last (digital) value
+	  an_value=0   :: uint32(),             %% last scaled analog value
+	  an_mask = 0  :: uint32(),             %% analog latch_mask
+	  an_inhibit = 0  :: uint32(),          %% abs micro seconds 
 	  src          :: term(),               %% last source
-	  time         :: erlang:timestamp(),   %% last time
+	  timestamp    :: erlang:timestamp(),   %% last time
 	  timer        :: reference() | undefined,
-	  estep = 0    :: integer(),             %% push encoder value
+	  estep = 0    :: integer(),            %% push encoder value
 	  config       :: #opt{}
 	}).
 
@@ -92,7 +116,7 @@ start_link(Options) ->
 init(Options) ->
     case set_options(Options, #opt {}) of
 	{ok, Config} ->
-	    {ok, ?S_NEUTRAL, #s { time = os:timestamp(),
+	    {ok, ?S_NEUTRAL, #s { timestamp = timestamp_us(),
 				  config = Config }};
 	{error, Reason} ->
 	    {stop, Reason}
@@ -120,12 +144,17 @@ s_neutral({analog,Value,Src}, S) ->
     analog_input(Value, Src, ?S_NEUTRAL, S);
 s_neutral({encoder,Value,Src}, S) ->
     encoder_input(Value, Src, ?S_NEUTRAL, S);
+s_neutral({rfid,Value,Src}, S) ->
+    rfid_input(Value, Src, ?S_NEUTRAL, S);
 %% digital/analog/encoder MUST be translated by dispatcher!
-s_neutral({Type,Value,Src}, S) when ?is_unsigned16(Type) ->
+s_neutral({Type,Value,Src}, S) when ?is_uint16(Type) ->
     output(Type,Value,Src,?S_NEUTRAL,S);
 s_neutral(pulse_done, S) ->
     io:format("s_neutral:pulse_done\n", []),
-    {next_state, ?S_NEUTRAL, S#s { estep = 0 }}.
+    {next_state, ?S_NEUTRAL, S#s { estep = 0 }};
+s_neutral(_Value, S) ->
+    io:format("garbage ~w seen in state s_neutral\n", [_Value]),
+    {next_state, ?S_NEUTRAL, S}.
 
 
 %% state while push_encoder and button is not released
@@ -145,27 +174,38 @@ s_push({digital,0,_Src}, S) ->
 s_push(_, S) ->
     {next_state, ?S_PUSH, S}.
 
-
-
-analog_input(Value, Src, State, S) ->
+analog_input(IValue, Src, State, S) ->
     Opt = S#s.config,
+    Value = trunc(IValue*Opt#opt.analog_scale + Opt#opt.analog_offs),
     %% transform value
-    Value1 = ((Value*Opt#opt.analog_scale) bsr 8) + Opt#opt.analog_offs,
     if Opt#opt.analog_to_digital ->
-	    if Value1 >= Opt#opt.analog_max ->
+	    if Value >= Opt#opt.analog_max ->
 		    digital_input(1, Src, State, S);
-	       Value1 =< Opt#opt.analog_min ->
+	       Value =< Opt#opt.analog_min ->
 		    digital_input(0, Src, State, S);
 	       true ->
 		    {next_state, State, S}
 	    end;
-       Value1 >= Opt#opt.analog_max ->
+       Value >= Opt#opt.analog_max ->
 	    output(analog,Opt#opt.analog_max,Src,State,S);
-       Value1 =< Opt#opt.analog_min ->
+       Value =< Opt#opt.analog_min ->
 	    output(analog,Opt#opt.analog_min,Src,State,S);
        true ->
-	    output(analog,Value1,Src,State,S)
+	    output(analog,Value,Src,State,S)
     end.    
+
+rfid_input(Value,Src,State,S) ->
+    Opt = S#s.config,
+    if Value band Opt#opt.rfid_mask =:= Opt#opt.rfid_match ->
+	    if Opt#opt.rfid_match_to_digital ->
+		    digital_input(1,Src,State,S);
+	       true ->
+		    output(rfid,Value,Src,State,S)
+	    end;
+       true ->
+	    {next_state, State, S}
+    end.
+
 
 digital_input(Value,Src,State,S) ->
     Opt = S#s.config,
@@ -287,6 +327,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+
 output(digital,0,_Src,State,S) when (S#s.config)#opt.on_only ->
     {next_state, State, S#s { value = 0 }};  %% ignore value? test
 output(digital,V,_Src,State,S) when V =/= 0, (S#s.config)#opt.off_only ->
@@ -299,6 +340,68 @@ output(encoder,V,_Src,State,S) when (S#s.config)#opt.dec_encoder, V > 0 ->
 output(encoder,Value,Src,State,S) ->
     send_output(encoder,Value,Src,S), %% do not set value field!
     {next_state, State, S#s { src=Src }};
+
+output(analog,Value,Src,State,S) ->
+    Opt = S#s.config,
+    Now = timestamp_us(), %% fixme: read this somewhere (pass in signal?)
+    Delta = Value - S#s.an_value,
+    %% calculate trigger bits
+    Mask =
+	if Value > Opt#opt.analog_upper_limit -> ?UPPER_LIMIT_EXCEEDED;
+	   true -> 0
+	end bor
+	if Value =< Opt#opt.analog_lower_limit -> ?BELOW_LOWER_LIMIT;
+	   true -> 0
+	end bor
+	if Delta > 0 ->
+		if Delta > Opt#opt.analog_delta ->
+			?CHANGED_BY_MORE_THAN_DELTA;
+		   true -> 0
+		end bor
+		    if
+			Delta > Opt#opt.analog_positive_delta ->
+			    ?CHANGED_BY_MORE_THAN_POSITIVE_DELTA;
+			true -> 0
+		    end;
+	   Delta < 0 ->
+		if Delta < -Opt#opt.analog_delta ->
+			?CHANGED_BY_MORE_THAN_DELTA;
+		   Delta < -Opt#opt.analog_negative_delta ->
+			?CHANGED_BY_MORE_THAN_NEGATIVE_DELTA;
+		   true ->
+			0
+		end;
+	   true ->
+		0
+	end,
+    %% Delta changes always trigger, but level changes only trigger
+    %% after the levels have been reset
+    Mask1 = Mask band Opt#opt.analog_trigger,
+
+    Latch = (Mask1 band ?DELTA_BITS =/= 0) 
+	orelse
+	  ((Mask1 band ?UPPER_LIMIT_EXCEEDED =/= 0)
+	   andalso
+	     (S#s.an_mask band ?UPPER_LIMIT_EXCEEDED =:= 0))
+	orelse
+	  ((Mask1 band ?BELOW_LOWER_LIMIT =/= 0)
+	   andalso
+	     (S#s.an_mask band ?BELOW_LOWER_LIMIT =:= 0)),
+
+    if Latch, Now > S#s.an_inhibit ->
+	    io:format("Output: ~w, trigger=~p\n", [Value,get_trigger(Mask1)]),
+	    send_output(analog,Value,Src,S),
+	    T1 = Now+Opt#opt.inhibit_us,
+	    {next_state, State, S#s { an_value = Value, 
+				      src=Src,
+				      an_mask = Mask,
+				      timestamp = Now,
+				      an_inhibit = T1 }};
+       true ->
+	    {next_state, State, S#s { src=Src,
+				      an_mask = Mask,
+				      timestamp = Now }}
+    end;
 output(Type,Value,Src,State,S) ->
     send_output(Type,Value,Src,S),
     {next_state, State, S#s { value = Value, src=Src }}.
@@ -338,17 +441,64 @@ set_option(K, V, Opt) ->
 	push_encoder when is_boolean(V) -> Opt#opt { push_encoder = V };
 	inc_encoder when is_boolean(V) -> Opt#opt { inc_encoder = V };
 	dec_encoder when is_boolean(V) -> Opt#opt { dec_encoder = V };
-	encoder_ival when ?is_unsigned16(V) -> Opt#opt { encoder_ival = V };
-	encoder_pause when ?is_unsigned16(V) -> Opt#opt { encoder_pause = V };
-	encoder_step when ?is_integer16(V) -> Opt#opt { encoder_step = V };
-	analog_min when ?is_unsigned16(V) -> Opt#opt { analog_min = V };
-	analog_max when ?is_unsigned16(V) -> Opt#opt { analog_max = V };
-	analog_offs when ?is_integer16(V) -> Opt#opt { analog_offs = V };
-	analog_scale when is_integer(V), V >= 0, V =< 255 ->
-	    Opt#opt { analog_scale = (V bsl 8) };
-	analog_scale when is_float(V), V >= 0.0, V =< 255.0 ->
-	    Opt#opt { analog_scale = min(trunc(V*256), 16#ffff) };
+	encoder_ival when ?is_uint32(V) -> Opt#opt { encoder_ival = V };
+	encoder_pause when ?is_uint32(V) -> Opt#opt { encoder_pause = V };
+	encoder_step when ?is_int32(V) -> Opt#opt { encoder_step = V };
+	analog_delta when ?is_uint32(V) -> Opt#opt { analog_delta = V };
+	analog_trigger when is_atom(V); is_list(V) ->
+	    Opt#opt { analog_trigger = make_trigger(V) };
+	analog_negative_delta when ?is_uint32(V) ->
+	    Opt#opt { analog_negative_delta = V };
+	analog_positive_delta when ?is_uint32(V) ->
+	    Opt#opt { analog_positive_delta = V };
+	analog_max_frequency when is_number(V) ->
+	    T = trunc(1000000.0/V),
+	    Opt#opt { analog_max_frequency = V, inhibit_us = T };
+	analog_upper_limit when ?is_int32(V) -> 
+	    Opt#opt { analog_upper_limit = V };
+	analog_lower_limit when ?is_int32(V) ->
+	    Opt#opt { analog_lower_limit = V };
+	analog_min when ?is_int32(V) -> Opt#opt { analog_min = V };
+	analog_max when ?is_int32(V) -> Opt#opt { analog_max = V };
+	analog_offs when ?is_int32(V) -> Opt#opt { analog_offs = V };
+	analog_scale when is_float(V) ->  Opt#opt { analog_scale = V };
+	%% rfid
+	rfid_match when ?is_uint32(V) -> Opt#opt { rfid_match = V };
+	rfid_mask  when ?is_uint32(V) -> Opt#opt { rfid_mask  = V };
+	rfid_match_to_digital when is_boolean(V) ->
+	    Opt#opt { rfid_match_to_digital = V };
+	%% output list
 	output when is_list(V) ->
 	    [ true = ((I >= 1) andalso (I =< 254)) || I <- V],
 	    Opt#opt { outputs = V }
     end.
+
+make_trigger([H|T]) ->
+    make_trigger(H) bor make_trigger(T);
+make_trigger([]) -> 0;
+make_trigger('upper-limit-exceeded') ->   ?UPPER_LIMIT_EXCEEDED;
+make_trigger('below_lower_limit') ->    ?BELOW_LOWER_LIMIT;
+make_trigger('changed-by-more-than-delta') ->    ?CHANGED_BY_MORE_THAN_DELTA;
+make_trigger('changed-by-more-than-negative-delta') -> 
+    ?CHANGED_BY_MORE_THAN_NEGATIVE_DELTA;
+make_trigger('changed-by-more-than-positive-delta') ->
+    ?CHANGED_BY_MORE_THAN_POSITIVE_DELTA.
+
+get_trigger(Mask) ->
+    select_bits(Mask, ['upper-limit-exceeded',
+		       'below-lower-limit',
+		       'changed-by-more-than-delta',
+		       'changed-by-more-than-negative-delta',
+		       'changed-by-more-than-positive-delta']).
+select_bits(0, _) ->
+    [];
+select_bits(Mask, [Name|Names]) when Mask band 1 =:= 1 ->
+    [Name | select_bits(Mask bsr 1, Names)];
+select_bits(Mask, [_|Names]) ->
+    select_bits(Mask bsr 1, Names).
+
+timestamp_us() ->
+    timestamp_us(os:timestamp()).
+
+timestamp_us({M,S,U}) ->
+    ((M*1000000+S)*1000000 + U).

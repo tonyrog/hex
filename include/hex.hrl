@@ -8,35 +8,38 @@
 -define(HEX_DIGITAL,        16#6000).  %% channel, 0|1
 -define(HEX_ANALOG,         16#6400).  %% channel, 0x0000 - 0xFFFF
 -define(HEX_ENCODER,        16#6100).  %% -1,+1
+-define(HEX_RFID,           16#6200).  %% channel=type data=rfid:32
 
 -type base_pattern() :: 
-	unsigned32() |
-	{mask,Mask::unsigned32(),Match::unsigned32()} |
+	uint32() |
+	{mask,Mask::uint32(),Match::uint32()} |
 	{range,Low::integer(),High::integer()} |
 	{'not',base_pattern()} |
 	{'and',base_pattern(),base_pattern()} |
 	{'or',base_pattern(),base_pattern()}.
 			
 -type pattern() :: base_pattern() | [base_pattern()].
--type unsigned32() :: 0..16#ffffffff.
--type unsigned16() :: 0..16#ffff.
--type integer16()  :: -32768..32767.
--type unsigned8() :: 0..16#ff.
+-type uint8() :: 0..16#ff.
+-type uint16() :: 0..16#ffff.
+-type uint32() :: 0..16#ffffffff.
+-type int8()   :: -16#80..16#7f.
+-type int16()  :: -16#8000..16#7fff.
+-type int32()  :: -16#80000000..16#7fffffff.
 
--define(is_unsigned8(X),  (((X) band (bnot 16#ff)) == 0) ).
--define(is_unsigned16(X), (((X) band (bnot 16#ffff)) == 0) ).
--define(is_unsigned32(X), (((X) band (bnot 16#ffffffff)) == 0) ).
--define(is_integer8(X), ( ( ((X) >= -128) andalso ((X) =< 127)) )).
--define(is_integer16(X), ( ( ((X) >= -32768) andalso ((X) =< 32767)) )).
-
+-define(is_uint8(X),  (((X) band (bnot 16#ff)) == 0) ).
+-define(is_uint16(X), (((X) band (bnot 16#ffff)) == 0) ).
+-define(is_uint32(X), (((X) band (bnot 16#ffffffff)) == 0) ).
+-define(is_int8(X), ( ( ((X) >= -16#80) andalso ((X) =< 16#7f)) )).
+-define(is_int16(X), ( ( ((X) >= -16#8000) andalso ((X) =< 16#7fff)) )).
+-define(is_int32(X), ( ( ((X) >= -16#80000000) andalso ((X) =< 16#7fffffff)) )).
 
 -record(hex_signal,
 	{
-	  id      :: unsigned32(),   %% signal ID
-	  chan    :: unsigned8(),    %% signal channel
-	  type    :: unsigned16(),   %% signal type (digital/analog..)
-	  value   :: unsigned32(),   %% signal value
-	  source  :: term()          %% signal source identifier
+	  id      :: uint32(),   %% signal ID
+	  chan    :: uint8(),    %% signal channel
+	  type    :: uint16(),   %% signal type (digital/analog..)
+	  value   :: uint32(),   %% signal value
+	  source  :: term()      %% signal source identifier
 	}).
 
 %% input rules
@@ -47,7 +50,7 @@
 	  chan  = []  :: pattern(),  %% signal channel pattern
 	  type  = []  :: pattern(),  %% signal type pattern
 	  value = []  :: pattern(),  %% signal value pattern
-	  output  :: [unsigned8()]   %% list of output channels
+	  output  :: [uint8()]   %% list of output channels
 	}).
 	  
 -record(hex_event, 

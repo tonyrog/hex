@@ -41,13 +41,23 @@ Specification of HomeExchange (Hex) configuration file
 	    off_only |
 		inc_encoder  |
 		dec_encoder  |
-		{encoder_ival, unsigned16()} |
-	    {encoder_pause, unsigned16()} |
-	    {encoder_step,  integer16()} |
-		{analog_min,  unsigned16()} |
-		{analog_max,  unsigned16()} |
-		{analog_offs, integer16() } |
-		{analog_scale, unsigned8()}
+		{encoder_ival,  uint32()} |
+	    {encoder_pause, uint32()} |
+	    {encoder_step,  int32()} |
+		{analog_trigger,
+			['all' | 'upper-limit-exceeded' |
+			 'below_lower_limit' |
+			 'changed-by-more-than-delta' |
+			 'changed-by-more-than-negative-delta' |
+		     'changed-by-more-than-positive-delta']},
+	    {analog_delta,  uint32()} |
+		{analog_negative_delta, uint32()} |
+		{analog_positive_delta, uint32()} |		
+		{analog_max_frequency, decimal64()}
+		{analog_min,  int32()} |
+		{analog_max,  int32()} |
+		{analog_offs, int32() } |
+		{analog_scale, int32()}
 
 #Output processing
 
@@ -68,10 +78,10 @@ Specification of HomeExchange (Hex) configuration file
 		{wait, timeout()} |
 		{inhbit,timeout()} |
 		{feedback, boolean()} |
-		{analog_min,  unsigned16()} |
-		{analog_max,  unsigned16()} |
-		{analog_offs, integer16() } |
-		{analog_scale, unsigned8()}		
+		{analog_min,  int32()} |
+		{analog_max,  int32()} |
+		{analog_offs, int32() } |
+		{analog_scale, decimal64()}		
 
     action() :: plugin_action() | [{pattern(),plugin_action()}].
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.
@@ -136,7 +146,7 @@ Event generators
 
 Input rules
 
-	{input,in1, {xcobid, pdo1_tx, 16#20001}, 20, [], [], [], [1]}
+	{input,in1, {xcobid, pdo1_tx, 16#20001}, 20, digital, [], [springback], [1]}
 
 	{input,in2, {xcobid, pdo1_tx, 16#20001}, 21, [], [], [], [2]}.
 

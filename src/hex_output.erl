@@ -10,6 +10,7 @@
 
 -behaviour(gen_fsm).
 
+-include("../include/hex.hrl").
 %% API
 -export([start_link/1]).
 
@@ -30,19 +31,19 @@
 	 
 -define(SERVER, ?MODULE).
 
--type uint32() :: 0..16#ffffffff.
-
 -record(state, {
 	  type    = digital :: digital | analog | pulse,
+	  nodeid  = 0 :: uint32(),    %% id of hex node
+	  chan    = 0 :: uint8(),     %% output number 1..254
 	  value   = 0 :: uint32(),    %% current value
 	  default = 0 :: uint32(),    %% default value 
 	  inhibit = 0 :: timeout(),   %% ignore delay
-	  delay   = 0 :: timeout(),     %% activation delay
-	  rampup  = 0 :: timeout(),    %% analog ramp up time
+	  delay   = 0 :: timeout(),   %% activation delay
+	  rampup  = 0 :: timeout(),   %% analog ramp up time
 	  rampdown = 0 :: timeout(),  %% analog ramp down time
 	  sustain = 0 :: timeout(),   %% time to stay active
-	  deact   = 0 :: timeout(),     %% deactivation delay
-	  wait    = 0 :: timeout(),      %% delay between re-activation
+	  deact   = 0 :: timeout(),   %% deactivation delay
+	  wait    = 0 :: timeout(),    %% delay between re-activation
 
 	  feedback = false :: boolean(), %% feedback frames as input 
 	  actions = []
@@ -102,15 +103,17 @@ init({_Flags,Actions}) ->
 %%                   {stop, Reason, NewState}
 %% @end
 %%--------------------------------------------------------------------
-state_off({digital,Val,_}, State) when Val =/= 0 ->
-    {next_state, state_on, State};
-state_off(_Event, State) ->
-    {next_state, state_off, State}.
+state_off({digital,Val,_}, S) when Val =/= 0 ->
+    S1 = action(?HEX_DIGITAL, 1, S#state.actions, S),
+    {next_state, state_on, S1};
+state_off(_Event, S) ->
+    {next_state, state_off, S}.
 
-state_on({digital,0,_}, State) ->
-    {next_state, state_off, State};
-state_on(_Event, State) ->
-    {next_state, state_on, State}.
+state_on({digital,0,_}, S) ->
+    S1 = action(?HEX_DIGITAL, 0, S#state.actions, S),
+    {next_state, state_off, S1};
+state_on(_Event, S) ->
+    {next_state, state_on, S}.
 
 state_activate(_Event, State) ->
     {next_state, state_activate, State}.
@@ -220,3 +223,41 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+feedback(Type,Value, S) when S#state.feedback ->
+    hex_server ! #hex_signal { id=S#state.nodeid,
+			       chan=S#state.chan,
+			       type=Type,
+			       value=Value,
+			       source={output,S#state.chan}}.
+
+
+action(Type, Value, Action, S) ->
+    feedback(Type, Value, S),
+    if is_list(Action) ->
+	    action_list(Value, Action, S);
+       true ->
+	    action_list(Value, [{Value,Action}], S)
+    end.
+
+action_list(Value, [{Match,Action} | Actions], S) ->
+    case hex_server:match_value(Match, Value) of
+	true ->
+	    execute(Action, [{value,Value}]),
+	    action_list(Value, Actions, S);
+	false ->
+	    action_list(Value, Actions, S)
+    end;
+action_list(_Value, [], S) ->
+    S.
+
+execute({App, AppFlags}, Env) ->
+    try App:output(AppFlags, Env) of
+	Result ->
+	    io:format("execute ~p = ~p\n", [{App,AppFlags}, Result]),
+	    Result
+    catch
+	error:Reason ->
+	    io:format("execute ~p = ~p\n", [{App,AppFlags}, {error,Reason}]),
+	    {error,Reason}
+    end.

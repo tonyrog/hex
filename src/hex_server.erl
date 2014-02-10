@@ -18,6 +18,7 @@
 	 terminate/2, code_change/3]).
 
 -export([output/2, input/2]).
+-export([match_value/2]).
 
 -include("../include/hex.hrl").
 
@@ -26,10 +27,8 @@
 
 -record(state, {
 	  tab :: ets:tab(),
-	  input_rules = [] :: [#hex_rule{}],
-	  output :: [dict()]
+	  input_rules = [] :: [#hex_rule{}]
 	 }).
-
 
 %%%===================================================================
 %%% API
@@ -63,8 +62,8 @@ start_link() ->
 init([]) ->
     Tab = ets:new(?TABLE, [named_table]),
     {ok, #state{ tab = Tab,
-		 input_rules = [],
-		 output = dict:new() }}.
+		 input_rules = []
+	       }}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -143,6 +142,69 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+start_plugin(App) ->
+    application:ensure_all_started([App]).
+
+stop_plugin(App) ->
+    application:stop(App).
+
+add_event(Label, {App, AppFlags}, Signal) ->
+    io:format("add_event: ~p ~p\n", [App,AppFlags]),
+    Ref = App:add_event(AppFlags, Signal),
+    io:format("event ~w started ~w\n", [Label, Ref]),
+    {Label,Ref}.
+
+del_event(Label,App,Ref) ->
+    io:format("del_event: ~p\n", [App]),
+    Res = App:del_event(Ref),
+    io:format("event ~w stopped ~w\n", [Label, Res]),
+    ok.
+
+run(Signal, Rules) when is_record(Signal, hex_signal) ->
+    run_(Signal, Rules).
+
+run_(Signal, [Rule|Rules]) ->
+    case match_rule(Signal, Rule) of
+	{true,Value} ->
+	    Src = Signal#hex_signal.source,
+	    V = case Signal#hex_signal.type of
+		    ?HEX_DIGITAL -> {digital,Value,Src};
+		    ?HEX_ANALOG ->  {analog,Value,Src};
+		    ?HEX_ENCODER -> {encoder,Value,Src};
+		    ?HEX_RFID    -> {rfid,Value,Src};
+		    Type -> {Type,Value,Src}
+		end,
+	    input(Rule#hex_rule.label, V),
+	    run_(Signal, Rules);
+	false ->
+	    run_(Signal, Rules)
+    end;
+run_(_Signal, []) ->
+    ok.
+
+match_rule(Signal, Rule) ->
+    case match_value(Signal#hex_signal.id, Rule#hex_rule.id) andalso 
+	match_value(Signal#hex_signal.chan, Rule#hex_rule.chan) andalso 
+	match_value(Signal#hex_signal.type, Rule#hex_rule.type) of
+	true ->
+	    case match_value(Signal#hex_signal.value, Rule#hex_rule.value) of
+		true -> {true, Signal#hex_signal.value};
+		false -> false
+	    end;
+	false ->
+	    false
+    end.
+
+match_value(A, A) -> true;
+match_value({mask,Mask,Match}, A) -> A band Mask =:= Match;
+match_value({range,Low,High}, A) -> (A >= Low) andalso (A =< High);
+match_value({'not',Cond}, A) -> not match_value(Cond,A);
+match_value({'and',C1,C2}, A) -> match_value(C1,A) andalso match_value(C2,A);
+match_value({'or',C1,C2}, A) -> match_value(C1,A) orelse match_value(C2,A);
+match_value([Cond|Cs], A) -> match_value(Cond,A) andalso match_value(Cs, A);
+match_value([], _A) -> true.
+
+
 input(I, Value) when is_integer(I); is_atom(I) ->
     io:format("input ~w ~w\n", [I, Value]),
     try ets:lookup({input,I}, ?TABLE) of
@@ -170,47 +232,3 @@ output(O, Value) when is_integer(O) ->
 	    io:format("warning: hex_server not running\n", []),
 	    ignore
     end.
-
-
-run(Signal, Rules) when is_record(Signal, hex_signal) ->
-    run_(Signal, Rules).
-
-run_(Signal, [Rule|Rules]) ->
-    case match_rule(Signal, Rule) of
-	{true,Value} ->
-	    Src = Signal#hex_signal.source,
-	    V = case Signal#hex_signal.type of
-		    ?HEX_DIGITAL -> {digital,Value,Src};
-		    ?HEX_ANALOG ->  {analog,Value,Src};
-		    ?HEX_ENCODER -> {encoder,Value,Src};
-		    Type -> {Type,Value,Src}
-		end,
-	    input(Rule#hex_rule.label, V),
-	    run_(Signal, Rules);
-	false ->
-	    run_(Signal, Rules)
-    end;
-run_(_Signal, []) ->
-    ok.
-
-match_rule(Signal, Rule) ->
-    case match_(Signal#hex_signal.id, Rule#hex_rule.id) andalso 
-	match_(Signal#hex_signal.chan, Rule#hex_rule.chan) andalso 
-	match_(Signal#hex_signal.type, Rule#hex_rule.type) of
-	true ->
-	    case match_(Signal#hex_signal.value, Rule#hex_rule.value) of
-		true -> {true, Signal#hex_signal.value};
-		false -> false
-	    end;
-	false ->
-	    false
-    end.
-
-match_(A, A) -> true;
-match_({mask,Mask,Match}, A) -> A band Mask =:= Match;
-match_({range,Low,High}, A) -> (A >= Low) andalso (A =< High);
-match_({'not',Cond}, A) -> not match_(Cond,A);
-match_({'and',C1,C2}, A) -> match_(C1,A) andalso match_(C2,A);
-match_({'or',C1,C2}, A) -> match_(C1,A) orelse match_(C2,A);
-match_([Cond|Cs], A) -> match_(Cond,A) andalso match_(Cs, A);
-match_([], _A) -> true.
