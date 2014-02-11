@@ -36,11 +36,12 @@ Specification of HomeExchange (Hex) configuration file
 		springback   |
 		push_encoder |
 	    analog_to_digital |
-	    digital_to_analog |		
+	    digital_to_analog |
+		invert |
 	    on_only  |
 	    off_only |
-		inc_encoder  |
-		dec_encoder  |
+		inc_encoder |
+		dec_encoder |
 		{encoder_ival,  uint32()} |
 	    {encoder_pause, uint32()} |
 	    {encoder_step,  int32()} |

@@ -37,6 +37,7 @@
 	  on_only    = false  :: boolean(),
 	  off_only   = false  :: boolean(),
 	  springback = false  :: boolean(),
+	  invert     = false  :: boolean(),
 	  analog_to_digital = false :: boolean(),
 	  digital_to_analog = false :: boolean(),
 	  %% encoder config
@@ -55,10 +56,10 @@
 	  inhibit_us = 0 :: uint32(),  %% derived from max_frequency
 	  analog_upper_limit = 16#ffff :: int32(),
 	  analog_lower_limit = 16#0000 :: int32(),
-	  analog_min = 0 :: int32(),
-	  analog_max = 16#ffff :: int32(),
-	  analog_offs = 0  :: int32(),
-	  analog_scale = 1.0 :: float(),
+	  analog_min = 0               :: int32(),
+	  analog_max = 16#ffff         :: int32(),
+	  analog_offs = 0              :: int32(),
+	  analog_scale = 1.0           :: float(),
 	  %% rfid config
 	  rfid_match = 0 :: uint32(),
 	  rfid_mask  = 0 :: uint32(),
@@ -206,9 +207,11 @@ rfid_input(Value,Src,State,S) ->
 	    {next_state, State, S}
     end.
 
-
-digital_input(Value,Src,State,S) ->
+digital_input(Value0,Src,State,S) ->
     Opt = S#s.config,
+    Value = if Opt#opt.invert -> 1-Value0;
+	       true -> Value0
+	    end,
     if 
 	Opt#opt.digital_to_analog ->
 	    if Value =:= 0 ->
@@ -399,7 +402,6 @@ output(analog,Value,Src,State,S) ->
 				      an_inhibit = T1 }};
        true ->
 	    {next_state, State, S#s { src=Src,
-				      an_mask = Mask,
 				      timestamp = Now }}
     end;
 output(Type,Value,Src,State,S) ->
@@ -438,6 +440,7 @@ set_option(K, V, Opt) ->
 	on_only when is_boolean(V) ->  Opt#opt { on_only = V };
 	off_only when is_boolean(V) -> Opt#opt { off_only = V };
 	springback when is_boolean(V) -> Opt#opt { springback = V };
+	invert     when is_boolean(V) -> Opt#opt { invert = V };
 	push_encoder when is_boolean(V) -> Opt#opt { push_encoder = V };
 	inc_encoder when is_boolean(V) -> Opt#opt { inc_encoder = V };
 	dec_encoder when is_boolean(V) -> Opt#opt { dec_encoder = V };
