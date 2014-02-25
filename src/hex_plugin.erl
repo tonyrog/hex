@@ -15,9 +15,19 @@
 			    list({FunctionName::atom(), Arity::integer()}).
 
 behaviour_info(callbacks) ->
-    [{add_event, 2}, {del_event, 1}, {output, 2}];
+    [{validate_event,2}, {init_event, 2},
+     {add_event, 2}, {del_event, 1}, {output, 2}];
 behaviour_info(_) ->
     undefined.
+
+%%
+%% validate_event(in | out, Flags::[{atom(),term()}]) -> ok | {error,_}
+%%
+
+%%
+%% init_event(in | out, Flags::[{atom(),term()}]) -> ok | {error,_}
+%%
+
 %%
 %%  add_event(Flags::[{atom(),term()}, Signal::signal()) ->    
 %%     {ok, Ref:reference()} | {error, Reason}

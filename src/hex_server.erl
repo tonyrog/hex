@@ -142,6 +142,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+load(File, State) ->
+    file:consult(File).
+
 start_plugin(App) ->
     application:ensure_all_started([App]).
 
@@ -219,6 +222,7 @@ input(I, Value) when is_integer(I); is_atom(I) ->
 	    ignore
     end.
 
+%% called from hex_input !
 output(O, Value) when is_integer(O) ->
     io:format("output ~w ~w\n", [O, Value]),
     try ets:lookup({output,O}, ?TABLE) of

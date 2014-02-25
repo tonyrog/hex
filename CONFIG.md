@@ -25,10 +25,7 @@ Specification of HomeExchange (Hex) configuration file
 	input() ::
       {input,
        Label::id(),
-	   ID::pattern(),
-       Chan::pattern(),
-       Type::pattern(),
-       Value::pattern(),
+       { ID::pattern(), Chan::pattern(), Type::pattern(), Value::pattern() },
        [input_flag()],[output_id()]
       }
 
@@ -65,7 +62,8 @@ Specification of HomeExchange (Hex) configuration file
     output() ::
       {output,
        Label::id(),
-       [output_flag()],action()
+       [output_flag()],
+	   action()
       }
 
 	output_flag() ::
