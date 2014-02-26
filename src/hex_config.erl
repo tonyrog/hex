@@ -186,7 +186,8 @@ validate_event(App, Dir, Flags) when is_atom(App) ->
 
 validate_actions({App,Flags}) ->
     validate_event(App, out, Flags);
-validate_actions([{App,Flags} | Actions]) ->
+validate_actions([{_Pattern,{App,Flags}} | Actions]) ->
+    %% fixme: validate pattern!
     case validate_event(App, out, Flags) of
 	ok -> validate_actions(Actions);
 	Error -> Error

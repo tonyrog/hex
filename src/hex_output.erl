@@ -118,15 +118,25 @@ init({Flags,Actions}) ->
 %%                   {stop, Reason, NewState}
 %% @end
 %%--------------------------------------------------------------------
-state_off({digital,Val,_}, S) when Val =/= 0 ->
-    S1 = action(?HEX_DIGITAL, 1, S#state.actions, S),
+state_off({digital,Val,Src}, S) when Val =/= 0 ->
+    Env = [{value,1}, {source,Src}],
+    S1 = action(?HEX_DIGITAL, 1, S#state.actions, Env, S),
     {next_state, state_on, S1};
+state_off({analog,Val,Src}, S) ->
+    Env = [{value,Val}, {source,Src}],
+    S1 = action(?HEX_ANALOG, Val, S#state.actions, Env, S),
+    {next_state, state_off, S1};
 state_off(_Event, S) ->
     {next_state, state_off, S}.
 
-state_on({digital,0,_}, S) ->
-    S1 = action(?HEX_DIGITAL, 0, S#state.actions, S),
+state_on({digital,0,Src}, S) ->
+    Env = [{value,0}, {source,Src}],
+    S1 = action(?HEX_DIGITAL, 0, S#state.actions, Env, S),
     {next_state, state_off, S1};
+state_on({analog,Val,Src}, S) ->
+    Env = [{value,Val}, {source,Src}],
+    S1 = action(?HEX_ANALOG, Val, S#state.actions, Env, S),
+    {next_state, state_on, S1};
 state_on(_Event, S) ->
     {next_state, state_on, S}.
 
@@ -290,32 +300,34 @@ feedback(Type,Value, S) ->
     end.
 
 
-action(Type, Value, Action, S) ->
+action(Type, Value, Action, Env, S) ->
+    %% fixme: probably better to convert to analog, then
+    %% have feedback input to remap to digital again.
     feedback(Type, Value, S),
     if is_list(Action) ->
-	    action_list(Value, Action, S);
+	    action_list(Value, Action, Env, S);
        true ->
-	    action_list(Value, [{Value,Action}], S)
+	    action_list(Value, [{Value,Action}], Env, S)
     end.
 
-action_list(Value, [{Match,Action} | Actions], S) ->
+action_list(Value, [{Match,Action} | Actions], Env, S) ->
     case hex_server:match_value(Match, Value) of
 	true ->
-	    execute(Action, [{value,Value}]),
-	    action_list(Value, Actions, S);
+	    execute(Action, Env),
+	    action_list(Value, Actions, Env, S);
 	false ->
-	    action_list(Value, Actions, S)
+	    action_list(Value, Actions, Env, S)
     end;
-action_list(_Value, [], S) ->
+action_list(_Value, [], _Env, S) ->
     S.
 
 execute({App, AppFlags}, Env) ->
     try App:output(AppFlags, Env) of
 	Result ->
-	    io:format("execute ~p = ~p\n", [{App,AppFlags}, Result]),
+	    lager:debug("execute ~p = ~p", [{App,AppFlags}, Result]),
 	    Result
     catch
 	error:Reason ->
-	    io:format("execute ~p = ~p\n", [{App,AppFlags}, {error,Reason}]),
+	    lager:debug("execute ~p = ~p", [{App,AppFlags}, {error,Reason}]),
 	    {error,Reason}
     end.

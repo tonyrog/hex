@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([start_link/1]).
 -export([reload/0, load/1]).
 
 %% gen_server callbacks
@@ -28,8 +28,9 @@
 -define(TABLE, hex_table).
 
 -record(state, {
-	  tab :: ets:tab(),
 	  file = "" :: string(),
+	  nodeid = 0 :: integer(),
+	  tab :: ets:tab(),
 	  out_list = []    :: [{Label::integer(), Pid::pid()}],
 	  in_list  = []    :: [{Label::integer(), Pid::pid()}],
 	  evt_list = []    :: [{Label::integer(), Ref::reference()}],
@@ -53,8 +54,8 @@ load(File) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(Options) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, Options, []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -71,11 +72,19 @@ start_link() ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
+init(Options) ->
     Tab = ets:new(?TABLE, [named_table]),
-    File = filename:join(code:priv_dir(hex), "local.conf"),
+    Nodeid = proplists:get_value(nodeid, Options, 1),
+    Name = proplists:get_value(config, Options, "local.conf"),
+    File = case filename:dirname(Name) of
+	       "." -> filename:join(code:priv_dir(hex), Name);
+	       _ -> Name
+	   end,
+    lager:debug("starting hex_server nodeid=~.16B, config=~s",
+		[Nodeid, File]),
     self() ! reload,
-    {ok, #state{ file = File,
+    {ok, #state{ nodeid = Nodeid,
+		 file = File,
 		 tab = Tab,
 		 input_rules = []
 	       }}.
@@ -202,12 +211,17 @@ reload(File, State) ->
 start_outputs([#hex_output { label=L, flags=Flags, actions=Actions} | Out],
 	      State) ->
     case Actions of
-	{App,_Flags} -> 
-	    start_plugin(App);
-	Apps when is_list(Apps) -> 
-	    lists:foreach(fun({App,_Flags}) -> start_plugin(App) end, Apps)
+	{App,AppFlags} -> 
+	    start_plugin(App,out,AppFlags);
+	_ when is_list(Actions) ->
+	    lists:foreach(
+	      fun({_Pattern,{App,AppFlags}}) ->
+		      start_plugin(App,out,AppFlags) 
+	      end, Actions)
     end,
-    {ok,Pid} = hex_output:start_link(Flags, Actions),
+    %% nodeid and chan is needed for feedback from output
+    Flags1 = [{nodeid,State#state.nodeid},{chan,L}|Flags],
+    {ok,Pid} = hex_output:start_link(Flags1, Actions),
     ets:insert(State#state.tab, {{output,L}, Pid}),
     OutList = [{L,Pid} | State#state.out_list],
     start_outputs(Out, State#state { out_list = OutList });
@@ -226,26 +240,48 @@ start_inputs([], State) ->
 %% start 
 start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
 	     State) ->
-    Res = start_plugin(App),
-    io:format("plugin ~w started = ~p\n", [App, Res]),
-    io:format("add_event: ~p ~p\n", [App,Flags]),  
-    {ok,Ref} = App:add_event(Flags, Signal),
-    io:format("event ~w started ~w\n", [L, Ref]),
-    EvtList = [{L,Ref} | State#state.evt_list],
-    start_events(Evt, State#state { evt_list = EvtList });
+    case start_plugin(App, in, Flags) of
+	ok ->
+	    io:format("add_event: ~p ~p\n", [App,Flags]),  
+	    {ok,Ref} = App:add_event(Flags, Signal),
+	    io:format("event ~w started ~w\n", [L, Ref]),
+	    EvtList = [{L,Ref} | State#state.evt_list],
+	    start_events(Evt, State#state { evt_list = EvtList });
+	_Error ->
+	    start_events(Evt, State)
+    end;
 start_events([], State) ->
     State.
 
 
-start_plugin(App) ->
-    application:ensure_all_started(App).
+start_plugin(App, Dir, Flags) ->
+    case application:ensure_all_started(App) of
+	{ok,[]} -> %% already started
+	    init_plugin(App, Dir, Flags);	    
+	{ok,Started} ->
+	    lager:info("plugin ~w started: ~p", [App,Started]),
+	    init_plugin(App, Dir, Flags);
+	Error ->
+	    lager:error("plugin ~w failed to start: ~p", [App, Error]),
+	    Error
+    end.
+
+init_plugin(App, Dir, Flags) ->
+    case App:init_event(Dir, Flags) of
+	ok ->
+	    lager:info("~w:~w event ~p initiated", [App,Dir,Flags]),
+	    ok;
+	Error ->
+	    lager:info("~w:~w event ~p failed ~p", [App,Dir,Flags,Error]),
+	    Error
+    end.
 
 
 run(Signal, Rules) when is_record(Signal, hex_signal) ->
     run_(Signal, Rules).
 
 run_(Sig, [Rule|Rules]) ->
-    lager:debug("run ~p rule=~p\n", [Sig, Rule]),
+    lager:debug("run ~p rule=~p", [Sig, Rule]),
     case match_pattern(Sig, Rule#hex_input.signal) of
 	{true,Value} ->
 	    Src = Sig#hex_signal.source,
@@ -290,7 +326,7 @@ match_value(_, _) -> false.
 
 
 input(I, Value) when is_integer(I); is_atom(I) ->
-    io:format("input ~w ~w\n", [I, Value]),
+    lager:debug("input ~w ~w", [I, Value]),
     try ets:lookup(?TABLE, {input,I}) of
 	[] ->
 	    io:format("warning: hex_input ~w not running\n", [I]),
@@ -305,15 +341,15 @@ input(I, Value) when is_integer(I); is_atom(I) ->
 
 %% called from hex_input !
 output(O, Value) when is_integer(O) ->
-    io:format("output ~w ~w\n", [O, Value]),
+    lager:debug("output ~w ~w", [O, Value]),
     try ets:lookup(?TABLE, {output,O}) of
 	[] -> 
-	    io:format("warning: output ~w not running\n", [O]),
+	    lager:warnin("output ~w not running", [O]),
 	    ignore;
 	[{_,Fsm}] ->
 	    gen_fsm:send_event(Fsm, Value)
     catch
 	error:badarg ->
-	    io:format("warning: hex_server not running\n", []),
+	    lager:warning("hex_server not running", []),
 	    ignore
     end.

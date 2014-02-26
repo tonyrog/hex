@@ -145,15 +145,28 @@ Event generators
 
 Input rules
 
-	{input,in1, {xcobid, pdo1_tx, 16#20001}, 20, digital, [], [springback], [1]}
+	{input,in1,
+		{{xcobid, pdo1_tx, 16#20001}, 20, digital, []},
+		[springback],
+		[1]}.
 
-	{input,in2, {xcobid, pdo1_tx, 16#20001}, 21, [], [], [], [2]}.
+	{input,in2,
+		{{xcobid, pdo1_tx, 16#20001}, 21, [], []},
+		[],
+		[2]}.
 
-    {input,in3, {xcobid, pdo1_tx, 16#20001}, 12, [], [], [], [3]}
+    {input,in3,
+		{{xcobid, pdo1_tx, 16#20001}, 12, [], []},
+		[],
+		[3]}.
 
-    {input,in4, {xcobid, pdo1_tx, 16#20001},  4, [], [], [], [4]}.
+    {input,in4,
+		{{xcobid, pdo1_tx, 16#20001},  4, [], []},
+		[], [4]}.
 
-    {input,in5, {xcobid, pdo1_tx, 16#20001},  5, digital, 1, [], [2,3,4]}.
+    {input,in5,
+		{{xcobid, pdo1_tx, 16#20001},  5, digital, 1, []},
+		[2,3,4]}.
 
 Output configuration and actions
 

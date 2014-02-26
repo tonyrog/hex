@@ -404,7 +404,7 @@ output(analog,Value,Src,State,S) ->
 	     (S#s.an_mask band ?BELOW_LOWER_LIMIT =:= 0)),
 
     if Latch, Now > S#s.an_inhibit ->
-	    io:format("Output: ~w, trigger=~p\n", [Value,get_trigger(Mask1)]),
+	    lager:debug("Output: ~w, trigger=~p", [Value,get_trigger(Mask1)]),
 	    send_output(analog,Value,Src,S),
 	    T1 = Now+Opt#opt.inhibit_us,
 	    {next_state, State, S#s { an_value = Value, 

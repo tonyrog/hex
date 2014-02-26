@@ -2,7 +2,7 @@
  [
   {description, "Home Exchange application"},
   {vsn, git},
-  {registered, [hex]},
+  {registered, [hex_server]},
   {applications, [
                   kernel,
                   stdlib
