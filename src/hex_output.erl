@@ -72,8 +72,8 @@ validate_flags(Flags) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Options, Actions) ->
-    gen_fsm:start_link(?MODULE, {Options,Actions}, []).
+start_link(Flags, Actions) ->
+    gen_fsm:start_link(?MODULE, {Flags,Actions}, []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -92,8 +92,8 @@ start_link(Options, Actions) ->
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
-init({Options,Actions}) ->
-    case set_options(Options, #opt {}) of
+init({Flags,Actions}) ->
+    case set_options(Flags, #opt {}) of
 	{ok, Config} ->
 	    S = #state { value = Config#opt.default,
 			 config = Config, 

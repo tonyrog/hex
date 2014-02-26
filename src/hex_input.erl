@@ -106,8 +106,8 @@ validate_flags(Flags) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Options) ->
-    gen_fsm:start_link({local, ?SERVER}, ?MODULE, Options, []).
+start_link(Flags) ->
+    gen_fsm:start_link(?MODULE, Flags, []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -126,8 +126,8 @@ start_link(Options) ->
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
-init(Options) ->
-    case set_options(Options, #opt {}) of
+init(Flags) ->
+    case set_options(Flags, #opt {}) of
 	{ok, Config} ->
 	    {ok, ?S_NEUTRAL, #s { timestamp = timestamp_us(),
 				  config = Config }};

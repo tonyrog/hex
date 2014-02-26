@@ -31,12 +31,8 @@
 -define(COBID_ENTRY_EXTENDED,       16#20000000).
 
 scan(Rules) ->
-    case scan_(Rules, [],[],[], []) of
-	{ok,{Event,Input,Output}} ->
-	    {Event,Input,Output};
-	Error ->
-	    Error
-    end.
+    scan_(Rules, [],[],[], []).
+
 
 scan_([R | Rs], E, I, O, Err) ->
     case R of

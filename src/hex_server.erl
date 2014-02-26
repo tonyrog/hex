@@ -12,13 +12,14 @@
 
 %% API
 -export([start_link/0]).
+-export([reload/0, load/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
 -export([output/2, input/2]).
--export([match_value/2]).
+-export([match_value/2, match_pattern/2]).
 
 
 -include("../include/hex.hrl").
@@ -28,12 +29,22 @@
 
 -record(state, {
 	  tab :: ets:tab(),
+	  file = "" :: string(),
+	  out_list = []    :: [{Label::integer(), Pid::pid()}],
+	  in_list  = []    :: [{Label::integer(), Pid::pid()}],
+	  evt_list = []    :: [{Label::integer(), Ref::reference()}],
 	  input_rules = [] :: [#hex_input{}]
 	 }).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+reload() ->
+    gen_server:call(?SERVER, reload).
+
+load(File) ->
+    gen_server:call(?SERVER, {load,File}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -62,7 +73,10 @@ start_link() ->
 %%--------------------------------------------------------------------
 init([]) ->
     Tab = ets:new(?TABLE, [named_table]),
-    {ok, #state{ tab = Tab,
+    File = filename:join(code:priv_dir(hex), "local.conf"),
+    self() ! reload,
+    {ok, #state{ file = File,
+		 tab = Tab,
 		 input_rules = []
 	       }}.
 
@@ -80,6 +94,20 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call({load,File}, _From, State) ->
+    case reload(File, State) of
+	{ok,State1} ->
+	    {reply, ok, State1#state { file = File}};
+	Error ->
+	    {reply, Error, State}
+    end;
+handle_call(reload, _From, State) ->
+    case reload(State#state.file, State) of
+	{ok,State1} ->
+	    {reply, ok, State1};
+	Error ->
+	    {reply, Error, State}
+    end;    
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -107,9 +135,18 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(Signal=#hex_signal{}, State) ->
-    run(Signal, State#state.input_rules),
+handle_info(Sig=#hex_signal{}, State) ->
+    lager:debug("signal input: ~p\n", [Sig]),
+    run(Sig, State#state.input_rules),
     {noreply, State};
+
+handle_info(reload, State) ->
+    case reload(State#state.file, State) of
+	{ok,State1} ->
+	    {noreply, State1};
+	_Error ->
+	    {noreply, State}
+    end;
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -143,35 +180,76 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-load(File, State) ->
-    file:consult(File).
+reload(File, State) ->
+    case file:consult(File) of
+	{ok,Config} ->
+	    case hex_config:scan(Config) of
+		{ok,{Evt,In,Out}} ->
+		    State1 = start_outputs(Out, State),
+		    State2 = start_inputs(In, State1),
+		    State3 = start_events(Evt, State2),
+		    {ok, State3#state { input_rules = In }};
+		Error={error,Reason} ->
+		    io:format("error loading ~s\n~p\n", [File,Reason]),
+		    Error
+	    end;
+	Error={error,Reason} ->
+	    io:format("error loading ~s\n~p\n", [File,Reason]),
+	    Error
+    end.
+
+
+start_outputs([#hex_output { label=L, flags=Flags, actions=Actions} | Out],
+	      State) ->
+    case Actions of
+	{App,_Flags} -> 
+	    start_plugin(App);
+	Apps when is_list(Apps) -> 
+	    lists:foreach(fun({App,_Flags}) -> start_plugin(App) end, Apps)
+    end,
+    {ok,Pid} = hex_output:start_link(Flags, Actions),
+    ets:insert(State#state.tab, {{output,L}, Pid}),
+    OutList = [{L,Pid} | State#state.out_list],
+    start_outputs(Out, State#state { out_list = OutList });
+start_outputs([], State) ->
+    State.
+
+start_inputs([#hex_input { label=L, flags = Flags, output=Output } | In],
+	     State) ->
+    {ok,Pid} = hex_input:start_link([{output,Output}|Flags]),
+    ets:insert(State#state.tab, {{input,L}, Pid}),
+    InList = [{L,Pid} | State#state.in_list],
+    start_inputs(In, State#state { in_list = InList });
+start_inputs([], State) ->
+    State.
+
+%% start 
+start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
+	     State) ->
+    Res = start_plugin(App),
+    io:format("plugin ~w started = ~p\n", [App, Res]),
+    io:format("add_event: ~p ~p\n", [App,Flags]),  
+    {ok,Ref} = App:add_event(Flags, Signal),
+    io:format("event ~w started ~w\n", [L, Ref]),
+    EvtList = [{L,Ref} | State#state.evt_list],
+    start_events(Evt, State#state { evt_list = EvtList });
+start_events([], State) ->
+    State.
+
 
 start_plugin(App) ->
-    application:ensure_all_started([App]).
+    application:ensure_all_started(App).
 
-stop_plugin(App) ->
-    application:stop(App).
-
-add_event(Label, {App, AppFlags}, Signal) ->
-    io:format("add_event: ~p ~p\n", [App,AppFlags]),
-    Ref = App:add_event(AppFlags, Signal),
-    io:format("event ~w started ~w\n", [Label, Ref]),
-    {Label,Ref}.
-
-del_event(Label,App,Ref) ->
-    io:format("del_event: ~p\n", [App]),
-    Res = App:del_event(Ref),
-    io:format("event ~w stopped ~w\n", [Label, Res]),
-    ok.
 
 run(Signal, Rules) when is_record(Signal, hex_signal) ->
     run_(Signal, Rules).
 
-run_(Signal, [Rule|Rules]) ->
-    case match_pattern(Signal, Rule#hex_input.signal) of
+run_(Sig, [Rule|Rules]) ->
+    lager:debug("run ~p rule=~p\n", [Sig, Rule]),
+    case match_pattern(Sig, Rule#hex_input.signal) of
 	{true,Value} ->
-	    Src = Signal#hex_signal.source,
-	    V = case Signal#hex_signal.type of
+	    Src = Sig#hex_signal.source,
+	    V = case Sig#hex_signal.type of
 		    ?HEX_DIGITAL -> {digital,Value,Src};
 		    ?HEX_ANALOG ->  {analog,Value,Src};
 		    ?HEX_ENCODER -> {encoder,Value,Src};
@@ -179,14 +257,15 @@ run_(Signal, [Rule|Rules]) ->
 		    Type -> {Type,Value,Src}
 		end,
 	    input(Rule#hex_input.label, V),
-	    run_(Signal, Rules);
+	    run_(Sig, Rules);
 	false ->
-	    run_(Signal, Rules)
+	    run_(Sig, Rules)
     end;
-run_(_Signal, []) ->
+run_(_Sig, []) ->
     ok.
 
-match_pattern(Sig, Pat) ->
+match_pattern(Sig, Pat) when is_record(Sig, hex_signal),
+			     is_record(Pat, hex_pattern) ->
     case match_value(Pat#hex_pattern.id,Sig#hex_signal.id) andalso 
 	match_value(Pat#hex_pattern.chan,Sig#hex_signal.chan) andalso 
 	match_value(Pat#hex_pattern.type, Sig#hex_signal.type) of
@@ -206,17 +285,18 @@ match_value({'not',Cond}, A) -> not match_value(Cond,A);
 match_value({'and',C1,C2}, A) -> match_value(C1,A) andalso match_value(C2,A);
 match_value({'or',C1,C2}, A) -> match_value(C1,A) orelse match_value(C2,A);
 match_value([Cond|Cs], A) -> match_value(Cond,A) andalso match_value(Cs, A);
-match_value([], _A) -> true.
+match_value([], _A) -> true;
+match_value(_, _) -> false.
 
 
 input(I, Value) when is_integer(I); is_atom(I) ->
     io:format("input ~w ~w\n", [I, Value]),
-    try ets:lookup({input,I}, ?TABLE) of
+    try ets:lookup(?TABLE, {input,I}) of
 	[] ->
 	    io:format("warning: hex_input ~w not running\n", [I]),
 	    ignore;
-	Fsm ->
-	    gen_fms:send_event(Fsm, Value)
+	[{_,Fsm}] ->
+	    gen_fsm:send_event(Fsm, Value)
     catch 
 	error:badarg ->
 	    io:format("warning: hex_server not running\n", []),
@@ -226,12 +306,12 @@ input(I, Value) when is_integer(I); is_atom(I) ->
 %% called from hex_input !
 output(O, Value) when is_integer(O) ->
     io:format("output ~w ~w\n", [O, Value]),
-    try ets:lookup({output,O}, ?TABLE) of
+    try ets:lookup(?TABLE, {output,O}) of
 	[] -> 
 	    io:format("warning: output ~w not running\n", [O]),
 	    ignore;
-	Fsm ->
-	    gen_fms:send_event(Fsm, Value)
+	[{_,Fsm}] ->
+	    gen_fsm:send_event(Fsm, Value)
     catch
 	error:badarg ->
 	    io:format("warning: hex_server not running\n", []),
