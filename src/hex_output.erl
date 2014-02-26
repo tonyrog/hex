@@ -12,7 +12,8 @@
 
 -include("../include/hex.hrl").
 %% API
--export([start_link/1]).
+-export([start_link/2]).
+-export([validate_flags/1]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
@@ -31,11 +32,10 @@
 	 
 -define(SERVER, ?MODULE).
 
--record(state, {
+-record(opt, {
 	  type    = digital :: digital | analog | pulse,
 	  nodeid  = 0 :: uint32(),    %% id of hex node
-	  chan    = 0 :: uint8(),     %% output number 1..254
-	  value   = 0 :: uint32(),    %% current value
+	  chan    = 0 :: uint8(),     %% output number 1..254	  
 	  default = 0 :: uint32(),    %% default value 
 	  inhibit = 0 :: timeout(),   %% ignore delay
 	  delay   = 0 :: timeout(),   %% activation delay
@@ -44,14 +44,24 @@
 	  sustain = 0 :: timeout(),   %% time to stay active
 	  deact   = 0 :: timeout(),   %% deactivation delay
 	  wait    = 0 :: timeout(),    %% delay between re-activation
+	  feedback = false :: boolean() %% feedback frames as input 
+	 }).
 
-	  feedback = false :: boolean(), %% feedback frames as input 
+-record(state, {
+	  config  = #opt {} :: #opt{},    %% config values
+	  value   = 0 :: uint32(),    %% current value
 	  actions = []
 	 }).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+validate_flags(Flags) ->
+    case set_options(Flags, #opt {}) of
+	{ok,_} -> ok;
+	Error -> Error
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -62,8 +72,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Config) ->
-    gen_fsm:start_link(?MODULE, Config, []).
+start_link(Options, Actions) ->
+    gen_fsm:start_link(?MODULE, {Options,Actions}, []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -82,11 +92,16 @@ start_link(Config) ->
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
-init({_Flags,Actions}) ->
-    S0 = #state { actions = Actions },
-    %% FIXME: Scan Flags and set timers etc...
-    %% lets assume that state is off default for now.
-    {ok, state_off, S0#state{ value = S0#state.default }}.
+init({Options,Actions}) ->
+    case set_options(Options, #opt {}) of
+	{ok, Config} ->
+	    S = #state { value = Config#opt.default,
+			 config = Config, 
+			 actions = Actions },
+	    {ok, state_off, S};
+	Error ->
+	    {stop, Error}
+    end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -224,12 +239,55 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-feedback(Type,Value, S) when S#state.feedback ->
-    hex_server ! #hex_signal { id=S#state.nodeid,
-			       chan=S#state.chan,
-			       type=Type,
-			       value=Value,
-			       source={output,S#state.chan}}.
+%%
+%% Set output options
+%%
+set_options([{Option,Value} | Options], Opt) ->
+    try set_option(Option, Value, Opt) of
+	Opt1 -> set_options(Options, Opt1)
+    catch
+	error:_ ->
+	    {error, {badarg, {Option, Value}}}
+    end;
+set_options([Option | Options], Opt) ->
+    try set_option(Option, true, Opt) of
+	Opt1 -> set_options(Options, Opt1)
+    catch
+	error:_ ->
+	    {error, {badarg,Option}}
+    end;
+set_options([], Opt) ->
+    {ok, Opt}.
+
+set_option(K, V, Opt) ->
+    case K of
+	type when V =:= digital; V =:= analog; V =:= pulse -> 
+	    Opt#opt  { type = V };
+	nodeid when ?is_uint32(V)   ->  Opt#opt { nodeid = V };
+	chan when ?is_uint8(V)      ->  Opt#opt { chan = V };
+	default when ?is_uint32(V)  ->  Opt#opt { default = V };
+	inhibit when ?is_timeout(V) -> Opt#opt { inhibit = V };
+	delay   when ?is_timeout(V) -> Opt#opt { delay = V };
+	rampup  when ?is_timeout(V) -> Opt#opt { rampup = V };
+	rampdown when ?is_timeout(V) -> Opt#opt { rampdown = V };
+	sustain when ?is_timeout(V) -> Opt#opt { sustain = V };
+	deact when ?is_timeout(V) -> Opt#opt { deact = V };
+	wait when  ?is_timeout(V) -> Opt#opt { wait = V };
+	feedback when is_boolean(V) -> Opt#opt { feedback = V }
+    end.
+	
+
+feedback(Type,Value, S) ->
+    Opt = S#state.config,
+    if Opt#opt.feedback ->
+	    hex_server ! #hex_signal { id=Opt#opt.nodeid,
+				       chan=Opt#opt.chan,
+				       type=Type,
+				       value=Value,
+				       source={output,Opt#opt.chan}};
+       true ->
+	    ok
+    end.
 
 
 action(Type, Value, Action, S) ->

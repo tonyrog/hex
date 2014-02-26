@@ -20,6 +20,7 @@
 -export([output/2, input/2]).
 -export([match_value/2]).
 
+
 -include("../include/hex.hrl").
 
 -define(SERVER, ?MODULE).
@@ -27,7 +28,7 @@
 
 -record(state, {
 	  tab :: ets:tab(),
-	  input_rules = [] :: [#hex_rule{}]
+	  input_rules = [] :: [#hex_input{}]
 	 }).
 
 %%%===================================================================
@@ -167,7 +168,7 @@ run(Signal, Rules) when is_record(Signal, hex_signal) ->
     run_(Signal, Rules).
 
 run_(Signal, [Rule|Rules]) ->
-    case match_rule(Signal, Rule) of
+    case match_pattern(Signal, Rule#hex_input.signal) of
 	{true,Value} ->
 	    Src = Signal#hex_signal.source,
 	    V = case Signal#hex_signal.type of
@@ -177,7 +178,7 @@ run_(Signal, [Rule|Rules]) ->
 		    ?HEX_RFID    -> {rfid,Value,Src};
 		    Type -> {Type,Value,Src}
 		end,
-	    input(Rule#hex_rule.label, V),
+	    input(Rule#hex_input.label, V),
 	    run_(Signal, Rules);
 	false ->
 	    run_(Signal, Rules)
@@ -185,13 +186,13 @@ run_(Signal, [Rule|Rules]) ->
 run_(_Signal, []) ->
     ok.
 
-match_rule(Signal, Rule) ->
-    case match_value(Signal#hex_signal.id, Rule#hex_rule.id) andalso 
-	match_value(Signal#hex_signal.chan, Rule#hex_rule.chan) andalso 
-	match_value(Signal#hex_signal.type, Rule#hex_rule.type) of
+match_pattern(Sig, Pat) ->
+    case match_value(Pat#hex_pattern.id,Sig#hex_signal.id) andalso 
+	match_value(Pat#hex_pattern.chan,Sig#hex_signal.chan) andalso 
+	match_value(Pat#hex_pattern.type, Sig#hex_signal.type) of
 	true ->
-	    case match_value(Signal#hex_signal.value, Rule#hex_rule.value) of
-		true -> {true, Signal#hex_signal.value};
+	    case match_value(Pat#hex_pattern.value,Sig#hex_signal.value) of
+		true -> {true, Sig#hex_signal.value};
 		false -> false
 	    end;
 	false ->

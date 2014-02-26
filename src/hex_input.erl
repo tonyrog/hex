@@ -13,6 +13,7 @@
 -include("../include/hex.hrl").
 %% API
 -export([start_link/1]).
+-export([validate_flags/1]).
 
 %% gen_fsm callbacks
 -export([init/1, s_neutral/2, s_push/2, 
@@ -34,6 +35,10 @@
 
 -record(opt,
 	{
+	  digital    = true   :: boolean(),
+	  analog     = true   :: boolean(),
+ 	  rfid       = true   :: boolean(),
+ 	  encoder    = true   :: boolean(),
 	  on_only    = false  :: boolean(),
 	  off_only   = false  :: boolean(),
 	  springback = false  :: boolean(),
@@ -85,6 +90,13 @@
 %%% API
 %%%===================================================================
 
+%% verify input_flags
+validate_flags(Flags) ->
+    case set_options(Flags, #opt {}) of
+	{ok,_} -> ok;
+	Error -> Error
+    end.
+	     
 %%--------------------------------------------------------------------
 %% @doc
 %% Creates a gen_fsm process which calls Module:init/1 to
@@ -413,26 +425,29 @@ send_output(Type,Value,Src,S) ->
     lists:foreach(fun(Out) -> hex_server:output(Out, Output) end,
 		  (S#s.config)#opt.outputs).
 
-
-set_options([{Option,Value} | Options], S) ->
-    try set_option(Option, Value, S) of
-	S1 -> set_options(Options, S1)
+set_options([{Option,Value} | Options], Opt) ->
+    try set_option(Option, Value, Opt) of
+	Opt1 -> set_options(Options, Opt1)
     catch
 	error:_ ->
 	    {error, {badarg, {Option, Value}}}
     end;
-set_options([Option | Options], S) ->
-    try set_option(Option, true, S) of
-	S1 -> set_options(Options, S1)
+set_options([Option | Options], Opt) ->
+    try set_option(Option, true, Opt) of
+	Opt1 -> set_options(Options, Opt1)
     catch
 	error:_ ->
 	    {error, {badarg,Option}}
     end;
-set_options([], S) ->
-    {ok, S}.
+set_options([], Opt) ->
+    {ok, Opt}.
 
 set_option(K, V, Opt) ->
     case K of
+	digital when is_boolean(V) -> Opt#opt { digital = V };
+	analog  when is_boolean(V) -> Opt#opt { analog = V };
+	encoder when is_boolean(V) -> Opt#opt { encoder = V };
+	rfid  when is_boolean(V) -> Opt#opt { rfid = V };
 	analog_to_digital when is_boolean(V) ->
 	    Opt#opt { analog_to_digital = V };
 	digital_to_analog when is_boolean(V) ->

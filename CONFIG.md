@@ -92,7 +92,7 @@ Specification of HomeExchange (Hex) configuration file
 
 	base_pattern() ::
         unsigned32() |
-        digital | analog | encoder |
+        digital | analog | encoder | rfid |
         variable() |
 		{mask,Mask::unsigned32(),Match::unsigned32()} |
 		{range,Low::integer(),High::integer()} |
@@ -105,8 +105,8 @@ Specification of HomeExchange (Hex) configuration file
 	pattern() :: base_pattern() | [base_pattern()].
 	
 	
-	can_id() :: uint11() | {cob,uint11()} | {cob,func(),ID::uint7()} |
-		{xcob,func(),ID::uint25()} | {xcob,uint29()}.
+	can_id() :: uint11() | {cobid,uint11()} | {cobid,func(),ID::uint7()} |
+		{xcobid,func(),ID::uint25()} | {xcobid,uint29()}.
 	         
 	func() :: nmt | sync | time_stamp |
 		      pdo1\_tx | pdo1\_rx |

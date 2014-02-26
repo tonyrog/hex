@@ -26,12 +26,19 @@
 -type int16()  :: -16#8000..16#7fff.
 -type int32()  :: -16#80000000..16#7fffffff.
 
+-define(is_uint4(X),  (((X) band (bnot 16#f)) == 0) ).
+-define(is_uint7(X),  (((X) band (bnot 16#7f)) == 0) ).
 -define(is_uint8(X),  (((X) band (bnot 16#ff)) == 0) ).
+-define(is_uint11(X),  (((X) band (bnot 16#7ff)) == 0) ).
 -define(is_uint16(X), (((X) band (bnot 16#ffff)) == 0) ).
+-define(is_uint24(X), (((X) band (bnot 16#ffffff)) == 0) ).
+-define(is_uint25(X), (((X) band (bnot 16#1ffffff)) == 0) ).
+-define(is_uint29(X), (((X) band (bnot 16#1fffffff)) == 0) ).
 -define(is_uint32(X), (((X) band (bnot 16#ffffffff)) == 0) ).
 -define(is_int8(X), ( ( ((X) >= -16#80) andalso ((X) =< 16#7f)) )).
 -define(is_int16(X), ( ( ((X) >= -16#8000) andalso ((X) =< 16#7fff)) )).
 -define(is_int32(X), ( ( ((X) >= -16#80000000) andalso ((X) =< 16#7fffffff)) )).
+-define(is_timeout(T), ?is_uint32(T)).
 
 -record(hex_signal,
 	{
@@ -42,15 +49,21 @@
 	  source  :: term()      %% signal source identifier
 	}).
 
-%% input rules
--record(hex_rule,
+-record(hex_pattern,
 	{
-	  label :: atom() | integer(),
 	  id    = []  :: pattern(),  %% signal id pattern
 	  chan  = []  :: pattern(),  %% signal channel pattern
 	  type  = []  :: pattern(),  %% signal type pattern
-	  value = []  :: pattern(),  %% signal value pattern
-	  output  :: [uint8()]   %% list of output channels
+	  value = []  :: pattern()   %% signal value pattern
+	}).
+
+%% input rules
+-record(hex_input,
+	{
+	  label :: atom() | integer(),  %% rule id
+	  signal :: #hex_pattern{},     %% input match pattern
+	  flags :: [{atom(),term()}],   %% input state flags
+	  output  :: [uint8()]          %% list of output channels
 	}).
 	  
 -record(hex_event, 
@@ -58,7 +71,7 @@
 	  label :: atom() | integer(),
 	  app :: atom(),               %% application name of plugin
 	  flags :: [{atom(),term()}],  %% event application flags
-	  signal :: #hex_signal{}      %% signal to send
+	  signal :: #hex_pattern{}     %% signal to send/match
 	}).
 
 -record(hex_output,
