@@ -15,7 +15,6 @@
 %%%
 %%%---- END COPYRIGHT ---------------------------------------------------------
 %%% @author Tony Rogvall <tony@rogvall.se>
-%%% @copyright (C) 2014, Tony Rogvall
 %%% @doc
 %%%    Hex definitions
 %%% @end
