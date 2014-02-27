@@ -73,6 +73,7 @@ validate_flags(Flags) ->
 %% @end
 %%--------------------------------------------------------------------
 start_link(Flags, Actions) ->
+    %% {debug,[trace]}
     gen_fsm:start_link(?MODULE, {Flags,Actions}, []).
 
 %%%===================================================================

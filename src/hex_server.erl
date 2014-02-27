@@ -18,7 +18,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
--export([output/2, input/2]).
+-export([output/2, input/2, event/2]).
 -export([match_value/2, match_pattern/2]).
 
 
@@ -150,6 +150,7 @@ handle_info(Sig=#hex_signal{}, State) ->
     {noreply, State};
 
 handle_info(reload, State) ->
+    lager:debug("reload", []),
     case reload(State#state.file, State) of
 	{ok,State1} ->
 	    {noreply, State1};
@@ -158,6 +159,7 @@ handle_info(reload, State) ->
     end;
 
 handle_info(_Info, State) ->
+    lager:debug("got info: ~p", [_Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -353,3 +355,19 @@ output(O, Value) when is_integer(O) ->
 	    lager:warning("hex_server not running", []),
 	    ignore
     end.
+
+event(Signal=#hex_signal{}, _Env) ->
+    hex_server ! Signal;
+event(Pattern=#hex_pattern{}, Env) ->
+    Signal =
+	#hex_signal { id    = event_value(Pattern#hex_pattern.id, Env),
+		      chan  = event_value(Pattern#hex_pattern.chan, Env),
+		      type  = event_value(Pattern#hex_pattern.type, Env),
+		      value = event_value(Pattern#hex_pattern.value, Env)
+		    },
+    hex_server ! Signal.
+
+event_value(Value, _) when is_integer(Value) ->
+    Value;
+event_value(Var, Env) when is_atom(Var) ->
+    proplists:get_value(Var, Env, 0).
