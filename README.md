@@ -17,10 +17,10 @@ Current plugins
 - hex_tellstick - [https://github.com/tonyrog/hex_tellstick](https://github.com/tonyrog/hex_tellstick)
 - hex_smtp - [https://github.com/tonyrog/hex_smtp](https://github.com/tonyrog/hex_smtp)
 - hex_debug - [https://github.com/tonyrog/hex_debug](https://github.com/tonyrog/hex_debug)
+- hex_piface - [https://github.com/tonyrog/hex_piface](https://github.com/tonyrog/hex_piface)
 
 In progress and planned plugins
 
-- hex_piface
 - hex_gps
 - hex_pop
 - hex_imap
