@@ -344,6 +344,6 @@ execute({App, AppFlags}, Env) ->
 	    Result
     catch
 	error:Reason ->
-	    lager:debug("execute ~p = ~p", [{App,AppFlags}, {error,Reason}]),
+	    lager:error("execute ~p = ~p", [{App,AppFlags}, {error,Reason}]),
 	    {error,Reason}
     end.

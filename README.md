@@ -11,17 +11,17 @@ Plenty of plugins exist to integrate with hardware.
 
 Current plugins
 
-- hex_can
-- hex_gpio
-- hex_sms
-- hex_tellstick
-- hex_debug
+- hex_can - [https://github.com/tonyrog/hex_can](https://github.com/tonyrog/hex_can)
+- hex_gpio - [https://github.com/tonyrog/hex_gpio](https://github.com/tonyrog/hex_gpio)
+- hex_sms - [https://github.com/tonyrog/hex_sms](https://github.com/tonyrog/hex_sms)
+- hex_tellstick - [https://github.com/tonyrog/hex_tellstick](https://github.com/tonyrog/hex_tellstick)
+- hex_smtp - [https://github.com/tonyrog/hex_smtp](https://github.com/tonyrog/hex_smtp)
+- hex_debug - [https://github.com/tonyrog/hex_debug](https://github.com/tonyrog/hex_debug)
 
 In progress and planned plugins
 
 - hex_piface
 - hex_gps
-- hex_smtp
 - hex_pop
 - hex_imap
 - hex_script
