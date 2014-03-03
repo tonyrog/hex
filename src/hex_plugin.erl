@@ -31,7 +31,7 @@
 
 behaviour_info(callbacks) ->
     [{validate_event,2}, {init_event, 2},
-     {add_event, 2}, {del_event, 1}, {output, 2}];
+     {add_event, 3}, {del_event, 1}, {output, 2}];
 behaviour_info(_) ->
     undefined.
 
@@ -44,7 +44,7 @@ behaviour_info(_) ->
 %%
 
 %%
-%%  add_event(Flags::[{atom(),term()}, Signal::signal()) ->    
+%%  add_event(Flags::[{atom(),term()}, Signal::signal(), Cb:function()) ->    
 %%     {ok, Ref:reference()} | {error, Reason}
 %%
 

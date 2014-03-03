@@ -259,9 +259,9 @@ start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
 	     State) ->
     case start_plugin(App, in, Flags) of
 	ok ->
-	    io:format("add_event: ~p ~p\n", [App,Flags]),  
-	    {ok,Ref} = App:add_event(Flags, Signal),
-	    io:format("event ~w started ~w\n", [L, Ref]),
+	    lager:debug("add_event: ~p ~p", [App,Flags]),  
+	    {ok,Ref} = App:add_event(Flags, Signal, ?MODULE),
+	    lager:debug("event ~w started ~w", [L, Ref]),
 	    EvtList = [{L,Ref} | State#state.evt_list],
 	    start_events(Evt, State#state { evt_list = EvtList });
 	_Error ->
@@ -346,13 +346,13 @@ input(I, Value) when is_integer(I); is_atom(I) ->
     lager:debug("input ~w ~w", [I, Value]),
     try ets:lookup(?TABLE, {input,I}) of
 	[] ->
-	    io:format("warning: hex_input ~w not running\n", [I]),
+	    lager:warning("hex_input ~w not running", [I]),
 	    ignore;
 	[{_,Fsm}] ->
 	    gen_fsm:send_event(Fsm, Value)
     catch 
 	error:badarg ->
-	    io:format("warning: hex_server not running\n", []),
+	    lager:warning("hex_server not running", []),
 	    ignore
     end.
 
@@ -361,7 +361,7 @@ output(O, Value) when is_integer(O) ->
     lager:debug("output ~w ~w", [O, Value]),
     try ets:lookup(?TABLE, {output,O}) of
 	[] -> 
-	    lager:warnin("output ~w not running", [O]),
+	    lager:warning("output ~w not running", [O]),
 	    ignore;
 	[{_,Fsm}] ->
 	    gen_fsm:send_event(Fsm, Value)
