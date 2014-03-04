@@ -33,7 +33,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
--export([output/2, input/2, event/2]).
+-export([output/2, input/2, event/2, transmit/2]).
 -export([match_value/2, match_pattern/2]).
 
 
@@ -49,6 +49,7 @@
 	  out_list = []    :: [{Label::integer(), Pid::pid()}],
 	  in_list  = []    :: [{Label::integer(), Pid::pid()}],
 	  evt_list = []    :: [{Label::integer(), Ref::reference()}],
+	  transmit_rules = []  :: [#hex_transmit{}],
 	  input_rules = [] :: [#hex_input{}]
 	 }).
 
@@ -146,7 +147,18 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast(_Msg, State) ->
+handle_cast({event,Signal=#hex_signal{}}, State) ->
+    lager:debug("input event: ~p\n", [Signal]),
+    run_event(Signal, State#state.input_rules),
+    {noreply, State};
+
+handle_cast({transmit,Signal=#hex_signal{}}, State) ->
+    lager:debug("transmit event: ~p\n", [Signal]),
+    run_transmit(Signal, State#state.transmit_rules),
+    {noreply, State};
+
+handle_cast(_Cast, State) ->
+    lager:debug("got cast: ~p", [_Cast]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -159,11 +171,6 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(Sig=#hex_signal{}, State) ->
-    lager:debug("signal input: ~p\n", [Sig]),
-    run(Sig, State#state.input_rules),
-    {noreply, State};
-
 handle_info(reload, State) ->
     lager:debug("reload", []),
     case reload(State#state.file, State) of
@@ -210,11 +217,12 @@ reload(File, State) ->
     case file:consult(File) of
 	{ok,Config} ->
 	    case hex_config:scan(Config) of
-		{ok,{Evt,In,Out}} ->
+		{ok,{Evt,In,Out,Trans}} ->
 		    State1 = start_outputs(Out, State),
 		    State2 = start_inputs(In, State1),
 		    State3 = start_events(Evt, State2),
-		    {ok, State3#state { input_rules = In }};
+		    State4 = start_transmit(Trans, State3),
+		    {ok, State4#state { input_rules = In }};
 		Error={error,Reason} ->
 		    io:format("error loading ~s\n~p\n", [File,Reason]),
 		    Error
@@ -270,6 +278,18 @@ start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
 start_events([], State) ->
     State.
 
+start_transmit([T=#hex_transmit { app=App,flags=Flags } |
+		Ts],   State) ->
+    case start_plugin(App, out, Flags) of
+	ok ->
+	    Rules = [T | State#state.transmit_rules],
+	    start_transmit(Ts, State#state { transmit_rules = Rules });
+	_Error ->
+	    start_transmit(Ts, State)
+    end;
+start_transmit([], State) ->
+    State.
+    
 
 start_plugin(App, Dir, Flags) ->
     case application:ensure_all_started(App) of
@@ -294,11 +314,10 @@ init_plugin(App, Dir, Flags) ->
     end.
 
 
-run(Signal, Rules) when is_record(Signal, hex_signal) ->
-    run_(Signal, Rules).
+run_event(Signal, Rules) when is_record(Signal, hex_signal) ->
+    run_event_(Signal, Rules).
 
-run_(Sig, [Rule|Rules]) ->
-    lager:debug("run ~p rule=~p", [Sig, Rule]),
+run_event_(Sig, [Rule|Rules]) ->
     case match_pattern(Sig, Rule#hex_input.signal) of
 	{true,Value} ->
 	    Src = Sig#hex_signal.source,
@@ -310,12 +329,30 @@ run_(Sig, [Rule|Rules]) ->
 		    Type -> {Type,Value,Src}
 		end,
 	    input(Rule#hex_input.label, V),
-	    run_(Sig, Rules);
+	    run_event_(Sig, Rules);
 	false ->
-	    run_(Sig, Rules)
+	    run_event_(Sig, Rules)
     end;
-run_(_Sig, []) ->
+run_event_(_Sig, []) ->
     ok.
+
+%% handle "distribution" messages when match
+run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
+    run_transmit_(Signal, Rules).
+
+run_transmit_(Signal, [Rule|Rules]) ->
+    case match_pattern(Signal, Rule#hex_transmit.signal) of
+	{true,_Value} ->
+	    App = Rule#hex_transmit.app,
+	    App:transmit(Signal, Rule#hex_transmit.flags),
+	    run_transmit_(Signal, Rules);
+	false ->
+	    run_event_(Signal, Rules)
+    end;
+run_transmit_(_Signal, []) ->
+    ok.
+
+
 
 match_pattern(Sig, Pat) when is_record(Sig, hex_signal),
 			     is_record(Pat, hex_pattern) ->
@@ -340,7 +377,6 @@ match_value({'or',C1,C2}, A) -> match_value(C1,A) orelse match_value(C2,A);
 match_value([Cond|Cs], A) -> match_value(Cond,A) andalso match_value(Cs, A);
 match_value([], _A) -> true;
 match_value(_, _) -> false.
-
 
 input(I, Value) when is_integer(I); is_atom(I) ->
     lager:debug("input ~w ~w", [I, Value]),
@@ -371,8 +407,12 @@ output(O, Value) when is_integer(O) ->
 	    ignore
     end.
 
+transmit(Signal=#hex_signal{}, _Env) ->
+    gen_server:cast(?SERVER, {transmit, Signal}).
+
+%% generate input event to dispatcher
 event(Signal=#hex_signal{}, _Env) ->
-    hex_server ! Signal;
+    gen_server:cast(?SERVER, {event, Signal});
 event(Pattern=#hex_pattern{}, Env) ->
     Signal =
 	#hex_signal { id    = event_value(Pattern#hex_pattern.id, Env),
@@ -380,7 +420,8 @@ event(Pattern=#hex_pattern{}, Env) ->
 		      type  = event_value(Pattern#hex_pattern.type, Env),
 		      value = event_value(Pattern#hex_pattern.value, Env)
 		    },
-    hex_server ! Signal.
+    gen_server:cast(?SERVER, {event, Signal}).
+
 
 event_value(Value, _) when is_integer(Value) ->
     Value;

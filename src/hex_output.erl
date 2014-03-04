@@ -58,15 +58,22 @@
 	  rampdown = 0 :: timeout(),  %% analog ramp down time
 	  sustain = 0 :: timeout(),   %% time to stay active
 	  deact   = 0 :: timeout(),   %% deactivation delay
-	  wait    = 0 :: timeout(),    %% delay between re-activation
+	  wait    = 0 :: timeout(),   %% delay between re-activation
+	  repeat  = 0 :: integer(),   %% pulse repeat count
 	  feedback = false :: boolean() %% feedback frames as input 
 	 }).
 
 -record(state, {
-	  config  = #opt {} :: #opt{},    %% config values
-	  value   = 0 :: uint32(),    %% current value
+	  config  = #opt {} :: #opt{},   %% config values
+	  value   = 0 :: uint32(),       %% current value
+	  counter = 0 :: uint32(),       %% repeat counter
+	  tref    = undefined :: undefined | reference(),
+	  env     = [],                  %% enironment for last event
 	  actions = []
 	 }).
+
+
+-define(STATE(Name), io:format("state: ~w\n", [(Name)])).
 
 %%%===================================================================
 %%% API
@@ -88,8 +95,9 @@ validate_flags(Flags) ->
 %% @end
 %%--------------------------------------------------------------------
 start_link(Flags, Actions) ->
-    %% {debug,[trace]}
-    gen_fsm:start_link(?MODULE, {Flags,Actions}, []).
+    FsmOptions = [],
+    %% FsmOptions = [{debug,[trace]}],
+    gen_fsm:start_link(?MODULE, {Flags,Actions}, FsmOptions).
 
 %%%===================================================================
 %%% gen_fsm callbacks
@@ -111,10 +119,10 @@ start_link(Flags, Actions) ->
 init({Flags,Actions}) ->
     case set_options(Flags, #opt {}) of
 	{ok, Config} ->
-	    S = #state { value = Config#opt.default,
-			 config = Config, 
-			 actions = Actions },
-	    {ok, state_off, S};
+	    State = #state { value = Config#opt.default,
+			     config = Config, 
+			     actions = Actions },
+	    {ok, state_off, State};
 	Error ->
 	    {stop, Error}
     end.
@@ -134,21 +142,18 @@ init({Flags,Actions}) ->
 %%                   {stop, Reason, NewState}
 %% @end
 %%--------------------------------------------------------------------
-state_off({digital,Val,Src}, S) when Val =/= 0 ->
-    Env = [{value,1}, {source,Src}],
-    S1 = action(?HEX_DIGITAL, 1, S#state.actions, Env, S),
-    {next_state, state_on, S1};
-state_off({analog,Val,Src}, S) ->
+state_off(Event={digital,Val,Src}, State) when Val =/= 0 ->
+    state_activate(Event, State#state { env = [{source,Src}] });
+state_off({analog,Val,Src}, State) ->
+    %% fixme: only in state_on?
     Env = [{value,Val}, {source,Src}],
-    S1 = action(?HEX_ANALOG, Val, S#state.actions, Env, S),
-    {next_state, state_off, S1};
-state_off(_Event, S) ->
-    {next_state, state_off, S}.
+    State1 = action(?HEX_ANALOG, Val, State#state.actions, Env, State),
+    {next_state, state_off, State1};
+state_off(_Event, State) ->
+    {next_state, state_off, State}.
 
-state_on({digital,0,Src}, S) ->
-    Env = [{value,0}, {source,Src}],
-    S1 = action(?HEX_DIGITAL, 0, S#state.actions, Env, S),
-    {next_state, state_off, S1};
+state_on({digital,0,Src}, State) ->
+    state_deactivate(init, State#state { env = [{source,Src}] });
 state_on({analog,Val,Src}, S) ->
     Env = [{value,Val}, {source,Src}],
     S1 = action(?HEX_ANALOG, Val, S#state.actions, Env, S),
@@ -156,32 +161,103 @@ state_on({analog,Val,Src}, S) ->
 state_on(_Event, S) ->
     {next_state, state_on, S}.
 
-state_activate(_Event, State) ->
-    {next_state, state_activate, State}.
+state_activate(Event, State) ->
+    active(1, State),
+    State1 = State#state { counter = (State#state.config)#opt.repeat },
+    state_reactivate(Event, State1).
 
-state_reactivate(_Event, State) ->
-    {next_state, state_reactivate, State}.
+state_reactivate(Event, State) ->
+    Time = (State#state.config)#opt.delay,
+    if Time > 0 ->
+	    TRef = gen_fsm:start_timer(Time, delay),
+	    State1 = State#state { tref = TRef },
+	    {next_state, state_delay, State1};
+       true ->
+	    state_rampup(Event, State)
+    end.
 
-state_delay(_Event, State) ->
-    {next_state, state_delay, State}.
+%% addme: accept {digital,0,_} to cancel activation in this phase!
+state_delay({timeout,TRef,delay}, State) when State#state.tref =:= TRef ->
+    State1 = State#state { tref = undefined },
+    state_rampup(init, State1).
 
-state_sustain(_Event, State) ->
-    {next_state, state_sustain, State}.
+state_rampup(init, State) ->
+    Time = (State#state.config)#opt.rampup,
+    if Time > 0 ->
+	    TRef = gen_fsm:start_timer(Time, rampup),
+	    State1 = State#state { tref = TRef },
+	    {next_state, state_rampup, State1};
+       true ->
+	    state_sustain(init, State)
+    end;
+state_rampup({timeout,TRef,rampup}, State) when State#state.tref =:= TRef ->
+    state_sustain(init, State#state { tref=undefined }).
 
-state_wait(_Event, State) ->
-    {next_state, state_rampup, State}.
-
-state_rampup(_Event, State) ->
-    {next_state, state_rampup, State}.
-
-state_rampdown(_Event, State) ->
-    {next_state, state_rampdown, State}.
+state_sustain(init, State) ->
+    Env = [{value,1}|State#state.env],
+    State1 = action(?HEX_DIGITAL, 1, State#state.actions, Env, State),
+    Time = (State#state.config)#opt.sustain,
+    if Time > 0 ->
+	    TRef = gen_fsm:start_timer(Time, sustain),
+	    State2 = State1#state { tref = TRef },
+	    {next_state, state_sustain, State2};
+       true ->
+	    {next_state, state_on, State1}
+    end;
+state_sustain({timeout,TRef,sustain}, State) when State#state.tref =:= TRef ->
+    state_deact(init, State#state { tref=undefined }).
 
 state_deactivate(_Event, State) ->
-    {next_state, state_deactivate, State}.
+    active(0, State),
+    state_deact(init, State).
 
-state_deact(_Event, State) ->
-    {next_state, state_deact, State}.
+state_deact(init, State) ->
+    Time = (State#state.config)#opt.deact,
+    if Time > 0 ->
+	    TRef = gen_fsm:start_timer(Time, deact),
+	    State1 = State#state { tref = TRef },
+	    {next_state, state_deact, State1};
+       true ->
+	    state_rampdown(init, State)
+    end;
+state_deact({timeout,TRef,deact}, State) when State#state.tref =:= TRef ->
+    state_rampdown(init, State#state { tref=undefined }).
+
+state_rampdown(init, State) ->
+    Time = (State#state.config)#opt.rampdown,
+    if Time > 0 ->
+	    TRef = gen_fsm:start_timer(Time, rampdown),
+	    State1 = State#state { tref = TRef },
+	    {next_state, state_rampdown, State1};
+       true ->
+	    state_wait(init, State)
+    end;
+state_rampdown({timeout,TRef,rampdown}, State) when State#state.tref =:= TRef ->
+    state_wait(init, State#state { tref=undefined }).
+
+state_wait(init, State) ->
+    Env = [{value,0}, State#state.env],
+    State1 = action(?HEX_DIGITAL, 0, State#state.actions, Env, State),
+    Time = (State1#state.config)#opt.wait,
+    if Time > 0 ->
+	    TRef = gen_fsm:start_timer(Time, wait),
+	    State2 = State1#state { tref = TRef },
+	    {next_state, state_wait, State2};
+       true ->
+	    active(0, State),
+	    {next_state, state_off, State1}
+    end;
+state_wait({timeout,TRef,wait}, State) when State#state.tref =:= TRef ->
+    Repeat = State#state.counter,
+    if  Repeat =:= 0 ->
+	    active(0, State),
+	    {next_state, state_off, State#state { tref=undefined }};
+	Repeat =:= -1 -> %% interval - pulse forever
+	    state_reactivate(init, State#state { tref=undefined });
+	Repeat > 0 ->  %% pulse counter
+	    state_reactivate(init, State#state { tref=undefined,
+						 counter = Repeat-1 })
+    end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -299,18 +375,36 @@ set_option(K, V, Opt) ->
 	sustain when ?is_timeout(V) -> Opt#opt { sustain = V };
 	deact when ?is_timeout(V) -> Opt#opt { deact = V };
 	wait when  ?is_timeout(V) -> Opt#opt { wait = V };
+	repeat when is_integer(V), V >= -1 -> Opt#opt { repeat = V };
 	feedback when is_boolean(V) -> Opt#opt { feedback = V }
     end.
-	
 
-feedback(Type,Value, S) ->
-    Opt = S#state.config,
+make_self(NodeID) ->
+    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff).
+
+%% output activity on/off
+active(Active, State) ->
+    Opt = State#state.config,
+    Signal = #hex_signal { id=make_self(Opt#opt.nodeid),
+			   chan=Opt#opt.chan,
+			   type=?HEX_OUTPUT_ACTIVE,
+			   value=Active,
+			   source={output,Opt#opt.chan}},
+    Env = [],
+    hex_server:transmit(Signal, Env).
+
+	
+%% output "virtual" feedback
+feedback(Type,Value, State) ->
+    Opt = State#state.config,
     if Opt#opt.feedback ->
-	    hex_server ! #hex_signal { id=Opt#opt.nodeid,
-				       chan=Opt#opt.chan,
-				       type=Type,
-				       value=Value,
-				       source={output,Opt#opt.chan}};
+	    Signal = #hex_signal { id=make_self(Opt#opt.nodeid),
+				   chan=Opt#opt.chan,
+				   type=Type,
+				   value=Value,
+				   source={output,Opt#opt.chan}},
+	    Env = [],
+	    hex_server:event(Signal, Env);
        true ->
 	    ok
     end.

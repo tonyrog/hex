@@ -25,6 +25,15 @@
 -define(HEX_ENCODER,        16#6100).  %% -1,+1
 -define(HEX_RFID,           16#6200).  %% channel=type data=rfid:32
 
+-define(HEX_POWER_ON,       16#2800).  %% Power ON
+-define(HEX_POWER_OFF,      16#2801).  %% Sent by unit before powerdown
+-define(HEX_WAKEUP,         16#2802).  %% Sent in wakeup signal
+-define(HEX_ALARM,          16#2803).  %% Alarm code notification
+
+-define(HEX_OUTPUT_ADD,     16#2804).  %% Add output interface
+-define(HEX_OUTPUT_DEL,     16#2805).  %% Delete output interface
+-define(HEX_OUTPUT_ACTIVE,  16#2806).  %% Active/Deactivate signal
+
 -type base_pattern() :: 
 	uint32() |
 	{mask,Mask::uint32(),Match::uint32()} |
@@ -96,4 +105,10 @@
 	  actions = []
 	}).
 
-	  
+-record(hex_transmit,
+	{
+	  label :: atom() | integer(),
+	  app :: atom(),      %% signal transmittion app
+	  flags = [] :: [atom() | {atom(),term()}],
+	  signal :: #hex_pattern{}     %% signal to match	  
+	}).

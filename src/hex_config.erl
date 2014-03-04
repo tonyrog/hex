@@ -46,26 +46,29 @@
 -define(COBID_ENTRY_EXTENDED,       16#20000000).
 
 scan(Rules) ->
-    scan_(Rules, [],[],[], []).
+    scan_(Rules, [],[],[],[],[]).
 
 
-scan_([R | Rs], E, I, O, Err) ->
+scan_([R | Rs], E, I, O, T, Err) ->
     case R of
 	{event,Label,{App,Flags},Event} when is_atom(App) ->
 	    {E1,Err1} = add_event(E,Label,App,Flags,Event,Err),
-	    scan_(Rs, E1, I, O, Err1);
+	    scan_(Rs, E1, I, O, T, Err1);
 	{input,Label,Event,Flags,Output} ->
 	    {I1,Err1} = add_input(I,Label,Event,Flags,Output,Err),
-	    scan_(Rs, E, I1, O, Err1);
+	    scan_(Rs, E, I1, O, T, Err1);
 	{output,Label,Flags,Actions} ->
 	    {O1,Err1} = add_output(O,Label,Flags,Actions,Err),
-	    scan_(Rs, E, I, O1, Err1);
+	    scan_(Rs, E, I, O1, T, Err1);
+	{transmit,Label,{App,Flags},Event} when is_atom(App) ->
+	    {T1,Err1} = add_transmit(T,Label,App,Flags,Event,Err),
+	    scan_(Rs, E, I, O, T1, Err1);
 	_ ->
-	    scan_(Rs, E, I, O, [{bad_rule,R} | Err])
+	    scan_(Rs, E, I, O, T, [{bad_rule,R} | Err])
     end;
-scan_([], E, I, O, []) ->
-    {ok,{E,I,O}};
-scan_([],_E,_I,_O,Err) ->
+scan_([], E, I, O, T, []) ->
+    {ok,{E,I,O,T}};
+scan_([],_E,_I,_O,_T,Err) ->
     {error,Err}.
 
 add_event(E, Label, App, Flags, Sig, Err) ->
@@ -134,6 +137,28 @@ add_output(O,Label,Flags,Actions,Err) ->
 	    { [Output|O], Err2 };
 	_ ->
 	    {O, [{output,Label,{error,ealready}} | Err]}
+    end.
+
+add_transmit(T, Label, App, Flags, Sig, Err) ->
+    case lists:keyfind(Label, #hex_transmit.label, T) of
+	false ->
+	    Err1 = case validate_event(App, out, Flags) of
+		       ok -> Err;
+		       Error1 -> [{transmit,Label,Error1}|Err]
+		   end,
+	    case hex_pattern(Sig) of
+		{ok,Pattern} ->
+		    Trans =
+			#hex_transmit { label=Label,
+					app=App,
+					flags=Flags,
+					signal=Pattern },
+		    {[Trans|T],Err1};
+		Error2 ->
+		    {T, [{transmit,Label,Error2}|Err1]}
+	    end;
+	_ ->
+	    {T, [{transmit,Label,{error,ealready}} | Err]}
     end.
 
 %% translate event pattern into internal form

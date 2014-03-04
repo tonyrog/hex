@@ -67,20 +67,21 @@ Specification of HomeExchange (Hex) configuration file
       }
 
 	output_flag() ::
-		{type,digital | analog | interval | puls} |
-		{default, unsigned32()} |
-		{delay, timeout()} |
-	    {rampup, timeout()} |
-		{rampdown, timeout()} |
-		{sustain, timeout()} |
-		{deact, timeout()} |
-		{wait, timeout()} |
-		{inhbit,timeout()} |
-		{feedback, boolean()} |
-		{analog_min,  int32()} |
-		{analog_max,  int32()} |
-		{analog_offs, int32() } |
-		{analog_scale, decimal64()}		
+		type        ::  digital | analog
+		default     :: unsigned32()
+		delay       :: timeout()
+	    rampup      :: timeout()
+		sustain     :: timeout()
+	    inhbit      :: timeout()
+		deact       :: timeout()
+		rampdown    :: timeout()
+		wait        :: timeout()
+		repeat      :: integer() -1 = pulse forever
+		feedback    :: boolean()
+		analog_min  :: int32()
+		analog_max  :: int32()
+		analog_offs :: int32()
+		analog_scale :: decimal64()
 
     action() :: plugin_action() | [{pattern(),plugin_action()}].
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.
