@@ -292,9 +292,9 @@ start_transmit([], State) ->
     
 
 start_plugin(App, Dir, Flags) ->
-    case application:ensure_all_started(App) of
+    case hex:start_all(App) of
 	{ok,[]} -> %% already started
-	    init_plugin(App, Dir, Flags);	    
+	    init_plugin(App, Dir, Flags);
 	{ok,Started} ->
 	    lager:info("plugin ~w started: ~p", [App,Started]),
 	    init_plugin(App, Dir, Flags);
