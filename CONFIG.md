@@ -1,6 +1,6 @@
 Specification of HomeExchange (Hex) configuration file
 
-    config() :: event() | input() | output()
+    config() :: event() | input() | output() | transmit()
 
 # Event processing
 
@@ -8,9 +8,7 @@ Specification of HomeExchange (Hex) configuration file
        {event,
 	     Label::id(),
          {App::app(),Flags::[plugin_input_flag()]},
-         { ID::event_id(),
-           Chan::event_chan(),
-           Type::event_type(),
+         { ID::event_id(), Chan::event_chan(), Type::event_type(),
            Value::pattern()
          }}
 
@@ -25,7 +23,7 @@ Specification of HomeExchange (Hex) configuration file
 	input() ::
       {input,
        Label::id(),
-       { ID::pattern(), Chan::pattern(), Type::pattern(), Value::pattern() },
+	   Pattern::event_pattern(),
        [input_flag()],[output_id()]
       }
 
@@ -67,7 +65,6 @@ Specification of HomeExchange (Hex) configuration file
       }
 
 	output_flag() ::
-		type        ::  digital | analog
 		default     :: unsigned32()
 		delay       :: timeout()
 	    rampup      :: timeout()
@@ -78,15 +75,23 @@ Specification of HomeExchange (Hex) configuration file
 		wait        :: timeout()
 		repeat      :: integer() -1 = pulse forever
 		feedback    :: boolean()
-		analog_min  :: int32()
-		analog_max  :: int32()
-		analog_offs :: int32()
-		analog_scale :: decimal64()
+        ramp_min    :: uint32() minimum time quant (hard is 20 ms)
+		analog_min  :: uint32()
+		analog_max  :: uint32()
 
     action() :: plugin_action() | [{pattern(),plugin_action()}].
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.
     plugin_output_flag() :: atom() | {atom(),term()}.
 
+
+# Transmit processing
+
+   transmit() ::
+       {transmit,
+	    Label::id(),
+		{App::atom(), Flags::[{atom(),term()}]},
+		Pattern::event_pattern()}.
+		
 #Common types
 
 	id() :: atom() | integer().
@@ -101,24 +106,28 @@ Specification of HomeExchange (Hex) configuration file
 		{'and',base_pattern(),base_pattern()} |
 		{'or',base_pattern(),base_pattern()}.
 
-	variable() :: atom().
+    variable() :: atom().
 		
-	pattern() :: base_pattern() | [base_pattern()].
-	
-	
+    pattern() :: base_pattern() | [base_pattern()].
+
+    event_pattern() ::
+       { ID::pattern(), Chan::pattern(), Type::pattern(), Value::pattern() }
+
+
 	can_id() :: uint11() | {cobid,uint11()} | {cobid,func(),ID::uint7()} |
 		{xcobid,func(),ID::uint25()} | {xcobid,uint29()}.
 	         
 	func() :: nmt | sync | time_stamp |
-		      pdo1\_tx | pdo1\_rx |
-  		      pdo2\_tx | pdo2\_rx |
-   		      pdo3\_tx | pdo3\_rx |
-   		      pdo4\_tx | pdo4\_rx |
-   		      sdo\_tx | sdo\_rx |
-			  node_guard | lss | emergency |
-			  uint4().
+    	      pdo1_tx | pdo1_rx |
+    	      pdo2_tx | pdo2_rx |
+    	      pdo3_tx | pdo3_rx |
+    	      pdo4_tx | pdo4_rx |
+    	      sdo_tx | sdo_rx |
+    		  node_guard | lss | emergency |
+    		  uint4().
 
 #Example
+
 
 Event generators
 
@@ -198,6 +207,12 @@ Output configuration and actions
 		{hex_tellstick,
 			[{protocol,ikea}, {unit,1}, {channel,1}]} }.
 
+Distribution rules - this rule send all matching signals over can bus
+
+    {transmit, 1,
+        {hex_can, []};
+        {[], [], [], []}}.
+		
 The account info for email is located in sys.config as
 plugin app hex\_email data.
 

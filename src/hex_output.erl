@@ -35,20 +35,19 @@
 	 handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 -export([state_off/2, 
 	 state_on/2,
-	 state_activate/2,
-	 state_reactivate/2,
 	 state_delay/2,
 	 state_sustain/2,
 	 state_wait/2,
 	 state_rampup/2,
 	 state_rampdown/2,
-	 state_deactivate/2,
 	 state_deact/2]).
 	 
 -define(SERVER, ?MODULE).
 
+%% note!  a short pulse must be at least 1 milli long, since 
+%% sustain = 0 means that output goes into state_on.
+%%
 -record(opt, {
-	  type    = digital :: digital | analog | pulse,
 	  nodeid  = 0 :: uint32(),    %% id of hex node
 	  chan    = 0 :: uint8(),     %% output number 1..254	  
 	  default = 0 :: uint32(),    %% default value 
@@ -56,11 +55,14 @@
 	  delay   = 0 :: timeout(),   %% activation delay
 	  rampup  = 0 :: timeout(),   %% analog ramp up time
 	  rampdown = 0 :: timeout(),  %% analog ramp down time
-	  sustain = 0 :: timeout(),   %% time to stay active
-	  deact   = 0 :: timeout(),   %% deactivation delay
-	  wait    = 0 :: timeout(),   %% delay between re-activation
-	  repeat  = 0 :: integer(),   %% pulse repeat count
-	  feedback = false :: boolean() %% feedback frames as input 
+	  sustain = 0 :: timeout(),   %% time to stay active 
+	  deact   = 0 :: timeout(),          %% deactivation delay
+	  wait    = 0 :: timeout(),          %% delay between re-activation
+	  repeat  = 0 :: integer(),          %% pulse repeat count
+	  feedback = false :: boolean(),     %% feedback frames as input 
+	  analog_min = 0 :: uint32(),        %% min analog value
+	  analog_max = 16#ffff :: uint32(),  %% max analog value
+	  ramp_min = 20 :: uint32()          %% min time quanta in during ramp
 	 }).
 
 -record(state, {
@@ -68,6 +70,8 @@
 	  value   = 0 :: uint32(),       %% current value
 	  counter = 0 :: uint32(),       %% repeat counter
 	  tref    = undefined :: undefined | reference(),
+	  tramp   = undefined :: undefined | reference(),
+	  deactivate = false :: boolean(), %% set while deactivate
 	  env     = [],                  %% enironment for last event
 	  actions = []
 	 }).
@@ -142,10 +146,10 @@ init({Flags,Actions}) ->
 %%                   {stop, Reason, NewState}
 %% @end
 %%--------------------------------------------------------------------
-state_off(Event={digital,Val,Src}, State) when Val =/= 0 ->
-    state_activate(Event, State#state { env = [{source,Src}] });
+state_off(Event={digital,1,Src}, State) ->
+    do_activate(Event, State#state { env = [{source,Src}] });
 state_off({analog,Val,Src}, State) ->
-    %% fixme: only in state_on?
+    %% fixme: only in state_on / state_sustain?
     Env = [{value,Val}, {source,Src}],
     State1 = action(?HEX_ANALOG, Val, State#state.actions, Env, State),
     {next_state, state_off, State1};
@@ -153,47 +157,105 @@ state_off(_Event, State) ->
     {next_state, state_off, State}.
 
 state_on({digital,0,Src}, State) ->
-    state_deactivate(init, State#state { env = [{source,Src}] });
+    do_deactivate(init, State#state { env = [{source,Src}] });
 state_on({analog,Val,Src}, S) ->
     Env = [{value,Val}, {source,Src}],
     S1 = action(?HEX_ANALOG, Val, S#state.actions, Env, S),
     {next_state, state_on, S1};
 state_on(_Event, S) ->
+    lager:debug("ignore event ~p", [_Event]),
     {next_state, state_on, S}.
 
-state_activate(Event, State) ->
-    active(1, State),
-    State1 = State#state { counter = (State#state.config)#opt.repeat },
-    state_reactivate(Event, State1).
-
-state_reactivate(Event, State) ->
+%% activation delay, activation may be cancelled in this phase
+%% by sending an digital 0 signal
+state_delay(init, State) ->
+    ?STATE(delay),
     Time = (State#state.config)#opt.delay,
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, delay),
 	    State1 = State#state { tref = TRef },
 	    {next_state, state_delay, State1};
        true ->
-	    state_rampup(Event, State)
-    end.
-
-%% addme: accept {digital,0,_} to cancel activation in this phase!
+	    state_rampup(init, State)
+    end;
 state_delay({timeout,TRef,delay}, State) when State#state.tref =:= TRef ->
     State1 = State#state { tref = undefined },
-    state_rampup(init, State1).
+    state_rampup(init, State1);
+state_delay({digital,0,Src}, State) ->
+    lager:debug("activation cancelled from", [Src]),
+    do_off(State);
+state_delay(_Event, S) ->
+    lager:debug("state_delay: ignore event ~p", [_Event]),
+    {next_state, state_delay, S}.
 
-state_rampup(init, State) ->
-    Time = (State#state.config)#opt.rampup,
+%% Ramping up output over rampup time milliseconds
+%% fixme: must set min_analog_step to calculate the time deltas
+%% during ramp. Now this is just a delay
+state_rampup(init, State=#state { config=Config }) ->
+    ?STATE(rampup),
+    Time = Config#opt.rampup,
     if Time > 0 ->
-	    TRef = gen_fsm:start_timer(Time, rampup),
-	    State1 = State#state { tref = TRef },
-	    {next_state, state_rampup, State1};
+	    %% FIXME: start from A=State#state.value !!!
+	    #opt { analog_max=A1, analog_min=A0, ramp_min=Tm} = Config,
+	    A = State#state.value,
+	    Ad = abs(A1 - A0),
+	    Td0 = trunc(Time*(1/Ad)),
+	    Td = max(Tm, Td0),
+	    T = 1-((A-A0)/Ad),
+	    Time1 = trunc(T*Time),
+	    io:format("rampup: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w\n", 
+		      [Time, Time1, Ad, Td0, Td, A]),
+	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
+	    TRamp = gen_fsm:start_timer(Time1, done),
+	    State1 = State#state { tref=TRef,tramp=TRamp },
+	    State2 = output_value(?HEX_ANALOG, 0, State1),
+	    {next_state, state_rampup, State2};
        true ->
 	    state_sustain(init, State)
     end;
-state_rampup({timeout,TRef,rampup}, State) when State#state.tref =:= TRef ->
-    state_sustain(init, State#state { tref=undefined }).
+state_rampup({timeout,TRef,{delta,Td}},State)
+  when State#state.tref =:= TRef ->
+    case erlang:read_timer(State#state.tramp) of
+	false ->
+	    {next_state, state_rampup, State#state { tref=undefined} };
+	Tr ->
+	    Config = State#state.config,
+	    #opt { analog_max=A1, analog_min=A0, rampup=Time } = Config,
+	    T = (Time - Tr)/Time,
+	    A = trunc((A1-A0)*T + A0),
+	    io:format("rampup: T=~w A=~w\n", [T, A]),
+	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
+	    State1 = State#state { tref = TRef1 },
+	    State2 = output_value(?HEX_ANALOG, A, State1),
+	    {next_state, state_rampup, State2}
+    end;
+state_rampup({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
+    if is_reference(State#state.tref) ->
+	    gen_fsm:cancel_timer(State#state.tref);
+       true ->
+	    ok
+    end,
+    State1 = State#state { tramp=undefined, tref=undefined },
+    #opt { analog_max=A } = State#state.config,
+    io:format("rampup: T=~w A=~w\n", [1.0, A]),
+    State2 = output_value(?HEX_ANALOG, A, State1),
+    state_sustain(init, State2);
+state_rampup(Event={digital,0,Src}, State) ->
+    lager:debug("rampup cancelled from", [Src]),
+    gen_fsm:cancel_timer(State#state.tref),
+    gen_fsm:cancel_timer(State#state.tramp),
+    %% fixme pick up remain time and calculate ramp down from that level
+    do_deactivate(Event, State#state { tref=undefined, tramp=undefined });
+state_rampup(_Event, S) ->
+    lager:debug("state_rampup: ignore event ~p", [_Event]),
+    {next_state, state_rampup, S}.
+
+%%
+%%  active state temporary (sustain>0) or permanent(sustain=0)
+%%
 
 state_sustain(init, State) ->
+    ?STATE(sustain),
     Env = [{value,1}|State#state.env],
     State1 = action(?HEX_DIGITAL, 1, State#state.actions, Env, State),
     Time = (State#state.config)#opt.sustain,
@@ -205,13 +267,18 @@ state_sustain(init, State) ->
 	    {next_state, state_on, State1}
     end;
 state_sustain({timeout,TRef,sustain}, State) when State#state.tref =:= TRef ->
-    state_deact(init, State#state { tref=undefined }).
-
-state_deactivate(_Event, State) ->
-    active(0, State),
-    state_deact(init, State).
-
+    state_deact(init, State#state { tref=undefined });
+state_sustain(Event={digital,0,Src}, State) ->
+    lager:debug("sustain cancelled from", [Src]),
+    gen_fsm:cancel_timer(State#state.tref),
+    do_deactivate(Event, State#state { tref = undefined });
+state_sustain(_Event, S) ->
+    lager:debug("state_sustain: ignore event ~p", [_Event]),
+    {next_state, state_sustain, S}.
+    
+%% deactivation delay
 state_deact(init, State) ->
+    ?STATE(deact),
     Time = (State#state.config)#opt.deact,
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, deact),
@@ -221,43 +288,140 @@ state_deact(init, State) ->
 	    state_rampdown(init, State)
     end;
 state_deact({timeout,TRef,deact}, State) when State#state.tref =:= TRef ->
-    state_rampdown(init, State#state { tref=undefined }).
+    state_rampdown(init, State#state { tref=undefined });
+state_deact(_Event={digital,1,Src}, State) ->
+    lager:debug("deact cancelled from", [Src]),
+    _Remain = gen_fsm:cancel_timer(State#state.tref),
+    %% calculate remain sustain? or think if this as reactivation?
+    state_sustain(init, State#state { tref = undefined, deactivate=false });
+state_deact(_Event, S) ->
+    lager:debug("state_deact: ignore event ~p", [_Event]),
+    {next_state, state_deact, S}.
 
-state_rampdown(init, State) ->
-    Time = (State#state.config)#opt.rampdown,
+%% Ramping down output over rampup time milliseconds
+%% fixme: must set min_analog_step to calculate the time deltas
+%% during ramp. Now this is just a delay
+state_rampdown(init, State=#state { config=Config }) ->
+    ?STATE(rampdown),
+    Time = Config#opt.rampdown,
     if Time > 0 ->
-	    TRef = gen_fsm:start_timer(Time, rampdown),
-	    State1 = State#state { tref = TRef },
-	    {next_state, state_rampdown, State1};
+	    #opt { analog_max=A1, analog_min=A0, ramp_min=Tm} = Config,
+	    A = State#state.value,
+	    Ad = abs(A1 - A0),
+	    Td0 = trunc(Time*(1/Ad)),
+	    Td = max(Tm, Td0),
+	    T = 1-((A1-A)/Ad),
+	    Time1 = trunc(T*Time),
+	    io:format("rampdown: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w\n", 
+		      [Time,Time1,Ad,Td,Td0,A]),
+	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
+	    TRamp = gen_fsm:start_timer(Time1, done),
+	    State1 = State#state { tref=TRef,tramp=TRamp },
+	    State2 = output_value(?HEX_ANALOG, A, State1),
+	    {next_state, state_rampdown, State2};
        true ->
 	    state_wait(init, State)
     end;
-state_rampdown({timeout,TRef,rampdown}, State) when State#state.tref =:= TRef ->
-    state_wait(init, State#state { tref=undefined }).
+state_rampdown({timeout,TRef,{delta,Td}},State)
+  when State#state.tref =:= TRef ->
+    case erlang:read_timer(State#state.tramp) of
+	false ->
+	    {next_state, state_rampdown, State#state {tref=undefined} };
+	Tr ->
+	    Config = State#state.config,
+	    #opt { analog_max=A1, analog_min=A0, rampdown=Time } = Config,
+	    T = (Time-Tr)/Time,
+	    A = trunc((A0-A1)*T + A1),
+	    io:format("rampdown: T=~w A=~w\n", [T, A]),
+	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
+	    State1 = State#state { tref = TRef1 },
+	    State2 = output_value(?HEX_ANALOG, A, State1),
+	    {next_state, state_rampdown, State2}
+    end;
+state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
+    if is_reference(State#state.tref) ->
+	    gen_fsm:cancel_timer(State#state.tref);
+       true ->
+	    ok
+    end,
+    State1 = State#state { tramp=undefined, tref=undefined },
+    #opt { analog_min=A } = State#state.config,
+    io:format("rampdown: T=~w A=~w\n", [1.0, A]),
+    State2 = output_value(?HEX_ANALOG, A, State1),
+    state_wait(init, State2);
+state_rampdown(_Event={digital,1,Src}, State) ->
+    lager:debug("rampdown cancelled from", [Src]),
+    _Remain = gen_fsm:cancel_timer(State#state.tref),
+    %% fixme: calculate a shortrt rampup from current level!
+    state_rampup(init, State#state { tref = undefined, deactivate=false });
+state_rampdown(_Event={digital,0,Src}, State) ->
+    lager:debug("deactivate during rampdown from", [Src]),
+    %% mark for deactivation - when ramp is done
+    {next_state, state_rampdown, State#state { deactivate=true }};
+state_rampdown(_Event, S) ->
+    lager:debug("state_rampdown: ignore event ~p", [_Event]),
+    {next_state, state_rampdown, S}.
 
 state_wait(init, State) ->
+    ?STATE(wait),
     Env = [{value,0}, State#state.env],
     State1 = action(?HEX_DIGITAL, 0, State#state.actions, Env, State),
-    Time = (State1#state.config)#opt.wait,
-    if Time > 0 ->
-	    TRef = gen_fsm:start_timer(Time, wait),
-	    State2 = State1#state { tref = TRef },
-	    {next_state, state_wait, State2};
+    WaitTime = (State1#state.config)#opt.wait,
+    if State1#state.deactivate =:= true;
+       State1#state.counter =:= 0 ->
+	    do_off(State1);
        true ->
-	    active(0, State),
-	    {next_state, state_off, State1}
+	    %% context switch event if WaitTime = 0!
+	    TRef = gen_fsm:start_timer(WaitTime, wait),
+	    State2 = State1#state { tref = TRef },
+	    {next_state, state_wait, State2}
     end;
 state_wait({timeout,TRef,wait}, State) when State#state.tref =:= TRef ->
     Repeat = State#state.counter,
-    if  Repeat =:= 0 ->
-	    active(0, State),
-	    {next_state, state_off, State#state { tref=undefined }};
+    if  Repeat =:= 0 -> %% should not happend?
+	    do_off(State#state { tref=undefined} );
 	Repeat =:= -1 -> %% interval - pulse forever
-	    state_reactivate(init, State#state { tref=undefined });
+	    do_reactivate(init, State#state { tref=undefined });
 	Repeat > 0 ->  %% pulse counter
-	    state_reactivate(init, State#state { tref=undefined,
-						 counter = Repeat-1 })
-    end.
+	    do_reactivate(init, State#state { tref=undefined,
+					      counter = Repeat-1 })
+    end;
+state_wait(_Event={digital,0,Src}, State) ->
+    lager:debug("deactivate during wait from", [Src]),
+    do_off(State);
+state_wait(_Event, State) ->
+    lager:debug("state_wait: ignore event ~p", [_Event]),
+    {next_state, state_wait, State}.
+
+
+do_activate(Event, State) ->
+    io:format("DO_ACTIVATE\n"),
+    transmit_active(1, State),
+    State1 = State#state { counter = (State#state.config)#opt.repeat },
+    do_reactivate(Event, State1).
+
+do_reactivate(_Event, State) ->
+    io:format("DO_REACTIVATE\n"),
+    %% state_delay(init, State).
+    state_rampup(init, State).
+
+do_deactivate(_Event, State) ->
+    io:format("DO_DEACTIVATE\n"),
+    transmit_active(0, State),
+    state_deact(init, State#state { deactivate=true }).
+
+do_off(State) ->
+    io:format("DO_OFF\n"),
+    _Remained = if is_reference(State#state.tref) ->
+			gen_fsm:cancel_timer(State#state.tref);
+		   true -> 0
+		end,
+    if State#state.deactivate ->
+	    ok; %% already sent
+       true ->
+	    transmit_active(0, State)
+    end,
+    {next_state, state_off, State#state { tref=undefined, deactivate=false}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -363,8 +527,6 @@ set_options([], Opt) ->
 
 set_option(K, V, Opt) ->
     case K of
-	type when V =:= digital; V =:= analog; V =:= pulse -> 
-	    Opt#opt  { type = V };
 	nodeid when ?is_uint32(V)   ->  Opt#opt { nodeid = V };
 	chan when ?is_uint8(V)      ->  Opt#opt { chan = V };
 	default when ?is_uint32(V)  ->  Opt#opt { default = V };
@@ -376,14 +538,17 @@ set_option(K, V, Opt) ->
 	deact when ?is_timeout(V) -> Opt#opt { deact = V };
 	wait when  ?is_timeout(V) -> Opt#opt { wait = V };
 	repeat when is_integer(V), V >= -1 -> Opt#opt { repeat = V };
-	feedback when is_boolean(V) -> Opt#opt { feedback = V }
+	feedback when is_boolean(V) -> Opt#opt { feedback = V };
+	analog_min when ?is_uint32(V) -> Opt#opt { analog_min = V };
+	analog_max when ?is_uint32(V) -> Opt#opt { analog_max = V };
+	ramp_min when ?is_uint32(V) -> Opt#opt { ramp_min = max(20, V) }
     end.
 
 make_self(NodeID) ->
     16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff).
 
 %% output activity on/off
-active(Active, State) ->
+transmit_active(Active, State) ->
     Opt = State#state.config,
     Signal = #hex_signal { id=make_self(Opt#opt.nodeid),
 			   chan=Opt#opt.chan,
@@ -393,7 +558,11 @@ active(Active, State) ->
     Env = [],
     hex_server:transmit(Signal, Env).
 
-	
+%% generate an action value and store value
+output_value(_Type, Value, State) ->
+    %% call action matching !
+    State#state { value = Value }.
+
 %% output "virtual" feedback
 feedback(Type,Value, State) ->
     Opt = State#state.config,
