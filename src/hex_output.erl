@@ -17,7 +17,7 @@
 %%%-------------------------------------------------------------------
 %%% @author Tony Rogvall <tony@rogvall.se>
 %%% @doc
-%%%    Hex output output machine
+%%%    Hex output machine
 %%% @end
 %%% Created :  3 Feb 2014 by Tony Rogvall <tony@rogvall.se>
 %%%-------------------------------------------------------------------
@@ -53,16 +53,16 @@
 	  default = 0 :: uint32(),    %% default value 
 	  inhibit = 0 :: timeout(),   %% ignore delay
 	  delay   = 0 :: timeout(),   %% activation delay
-	  rampup  = 0 :: timeout(),   %% analog ramp up time
-	  rampdown = 0 :: timeout(),  %% analog ramp down time
+	  rampup  = 0 :: timeout(),   %% ramp up time
 	  sustain = 0 :: timeout(),   %% time to stay active 
-	  deact   = 0 :: timeout(),          %% deactivation delay
-	  wait    = 0 :: timeout(),          %% delay between re-activation
-	  repeat  = 0 :: integer(),          %% pulse repeat count
-	  feedback = false :: boolean(),     %% feedback frames as input 
-	  analog_min = 0 :: uint32(),        %% min analog value
-	  analog_max = 16#ffff :: uint32(),  %% max analog value
-	  ramp_min = 20 :: uint32()          %% min time quanta in during ramp
+	  rampdown = 0 :: timeout(),  %% ramp down time
+	  deact   = 0 :: timeout(),         %% deactivation delay
+	  wait    = 0 :: timeout(),         %% delay between re-activation
+	  repeat  = 0 :: integer(),         %% pulse repeat count
+	  feedback = false :: boolean(),    %% feedback frames as input 
+	  min_value = 0 :: uint32(),        %% min value
+	  max_value = 16#ffff :: uint32(),  %% max value
+	  ramp_min = 20 :: uint32()         %% min time quanta in during ramp
 	 }).
 
 -record(state, {
@@ -72,12 +72,14 @@
 	  tref    = undefined :: undefined | reference(),
 	  tramp   = undefined :: undefined | reference(),
 	  deactivate = false :: boolean(), %% set while deactivate
+	  inhibited  = false :: boolean(), %% disallow activation
 	  env     = [],                  %% enironment for last event
 	  actions = []
 	 }).
 
 
 -define(STATE(Name), io:format("state: ~w\n", [(Name)])).
+-define(verbose(Fmt,As), io:format((Fmt)++"\n", (As))).
 
 %%%===================================================================
 %%% API
@@ -123,10 +125,10 @@ start_link(Flags, Actions) ->
 init({Flags,Actions}) ->
     case set_options(Flags, #opt {}) of
 	{ok, Config} ->
-	    State = #state { value = Config#opt.default,
-			     config = Config, 
-			     actions = Actions },
-	    {ok, state_off, State};
+	    Value = clamp(Config, Config#opt.default),
+	    State = #state { config = Config, actions = Actions },
+	    State1 = output_value(?HEX_ANALOG, Value, State),
+	    {ok, state_off, State1};
 	Error ->
 	    {stop, Error}
     end.
@@ -147,7 +149,12 @@ init({Flags,Actions}) ->
 %% @end
 %%--------------------------------------------------------------------
 state_off(Event={digital,1,Src}, State) ->
-    do_activate(Event, State#state { env = [{source,Src}] });
+    if State#state.inhibited ->
+	    ?verbose("inhibited in state_off", []),
+	        {next_state, state_off, State};
+       true ->
+	    do_activate(Event, State#state { env = [{source,Src}] })
+    end;
 state_off({analog,Val,Src}, State) ->
     %% fixme: only in state_on / state_sustain?
     Env = [{value,Val}, {source,Src}],
@@ -189,21 +196,19 @@ state_delay(_Event, S) ->
     {next_state, state_delay, S}.
 
 %% Ramping up output over rampup time milliseconds
-%% fixme: must set min_analog_step to calculate the time deltas
-%% during ramp. Now this is just a delay
 state_rampup(init, State=#state { config=Config }) ->
     ?STATE(rampup),
     Time = Config#opt.rampup,
     if Time > 0 ->
 	    %% FIXME: start from A=State#state.value !!!
-	    #opt { analog_max=A1, analog_min=A0, ramp_min=Tm} = Config,
+	    #opt { max_value=A1, min_value=A0, ramp_min=Tm} = Config,
 	    A = State#state.value,
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
 	    Td = max(Tm, Td0),
 	    T = 1-((A-A0)/Ad),
 	    Time1 = trunc(T*Time),
-	    io:format("rampup: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w\n", 
+	    ?verbose("rampup: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w", 
 		      [Time, Time1, Ad, Td0, Td, A]),
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
@@ -220,10 +225,10 @@ state_rampup({timeout,TRef,{delta,Td}},State)
 	    {next_state, state_rampup, State#state { tref=undefined} };
 	Tr ->
 	    Config = State#state.config,
-	    #opt { analog_max=A1, analog_min=A0, rampup=Time } = Config,
+	    #opt { max_value=A1, min_value=A0, rampup=Time } = Config,
 	    T = (Time - Tr)/Time,
 	    A = trunc((A1-A0)*T + A0),
-	    io:format("rampup: T=~w A=~w\n", [T, A]),
+	    ?verbose("rampup: T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
 	    State2 = output_value(?HEX_ANALOG, A, State1),
@@ -236,8 +241,8 @@ state_rampup({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
 	    ok
     end,
     State1 = State#state { tramp=undefined, tref=undefined },
-    #opt { analog_max=A } = State#state.config,
-    io:format("rampup: T=~w A=~w\n", [1.0, A]),
+    #opt { max_value=A } = State#state.config,
+    ?verbose("rampup: T=~w A=~w", [1.0, A]),
     State2 = output_value(?HEX_ANALOG, A, State1),
     state_sustain(init, State2);
 state_rampup(Event={digital,0,Src}, State) ->
@@ -290,30 +295,34 @@ state_deact(init, State) ->
 state_deact({timeout,TRef,deact}, State) when State#state.tref =:= TRef ->
     state_rampdown(init, State#state { tref=undefined });
 state_deact(_Event={digital,1,Src}, State) ->
-    lager:debug("deact cancelled from", [Src]),
-    _Remain = gen_fsm:cancel_timer(State#state.tref),
-    %% calculate remain sustain? or think if this as reactivation?
-    state_sustain(init, State#state { tref = undefined, deactivate=false });
+    if State#state.inhibited ->
+	    ?verbose("inhibited in state_deact", []),
+	        {next_state, state_deact, State};
+       true ->
+	    lager:debug("deact cancelled from", [Src]),
+	    _Remain = gen_fsm:cancel_timer(State#state.tref),
+	    %% calculate remain sustain? or think if this as reactivation?
+	    state_sustain(init, State#state { tref = undefined, 
+					      deactivate=false })
+    end;
 state_deact(_Event, S) ->
     lager:debug("state_deact: ignore event ~p", [_Event]),
     {next_state, state_deact, S}.
 
 %% Ramping down output over rampup time milliseconds
-%% fixme: must set min_analog_step to calculate the time deltas
-%% during ramp. Now this is just a delay
 state_rampdown(init, State=#state { config=Config }) ->
     ?STATE(rampdown),
     Time = Config#opt.rampdown,
     if Time > 0 ->
-	    #opt { analog_max=A1, analog_min=A0, ramp_min=Tm} = Config,
+	    #opt { max_value=A1, min_value=A0, ramp_min=Tm} = Config,
 	    A = State#state.value,
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
 	    Td = max(Tm, Td0),
 	    T = 1-((A1-A)/Ad),
 	    Time1 = trunc(T*Time),
-	    io:format("rampdown: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w\n", 
-		      [Time,Time1,Ad,Td,Td0,A]),
+	    ?verbose("rampdown: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w",
+		     [Time,Time1,Ad,Td,Td0,A]),
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
 	    State1 = State#state { tref=TRef,tramp=TRamp },
@@ -329,10 +338,10 @@ state_rampdown({timeout,TRef,{delta,Td}},State)
 	    {next_state, state_rampdown, State#state {tref=undefined} };
 	Tr ->
 	    Config = State#state.config,
-	    #opt { analog_max=A1, analog_min=A0, rampdown=Time } = Config,
+	    #opt { max_value=A1, min_value=A0, rampdown=Time } = Config,
 	    T = (Time-Tr)/Time,
 	    A = trunc((A0-A1)*T + A1),
-	    io:format("rampdown: T=~w A=~w\n", [T, A]),
+	    ?verbose("rampdown: T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
 	    State2 = output_value(?HEX_ANALOG, A, State1),
@@ -345,15 +354,20 @@ state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
 	    ok
     end,
     State1 = State#state { tramp=undefined, tref=undefined },
-    #opt { analog_min=A } = State#state.config,
-    io:format("rampdown: T=~w A=~w\n", [1.0, A]),
+    #opt { min_value=A } = State#state.config,
+    ?verbose("rampdown: T=~w A=~w", [1.0, A]),
     State2 = output_value(?HEX_ANALOG, A, State1),
     state_wait(init, State2);
 state_rampdown(_Event={digital,1,Src}, State) ->
-    lager:debug("rampdown cancelled from", [Src]),
-    _Remain = gen_fsm:cancel_timer(State#state.tref),
-    %% fixme: calculate a shortrt rampup from current level!
-    state_rampup(init, State#state { tref = undefined, deactivate=false });
+    if State#state.inhibited ->
+	    ?verbose("inhibited in state_rampdown", []),
+	    {next_state, state_rampdown, State};
+       true ->
+	    lager:debug("rampdown cancelled from", [Src]),
+	    _Remain = gen_fsm:cancel_timer(State#state.tref),
+	    state_rampup(init, State#state { tref = undefined,
+					     deactivate=false })
+    end;
 state_rampdown(_Event={digital,0,Src}, State) ->
     lager:debug("deactivate during rampdown from", [Src]),
     %% mark for deactivation - when ramp is done
@@ -394,24 +408,36 @@ state_wait(_Event, State) ->
     {next_state, state_wait, State}.
 
 
-do_activate(Event, State) ->
-    io:format("DO_ACTIVATE\n"),
+do_activate(Event, State=#state{config=Config}) ->
+    ?verbose("DO_ACTIVATE",[]),
     transmit_active(1, State),
-    State1 = State#state { counter = (State#state.config)#opt.repeat },
+    Inhibited = if Config#opt.inhibit > 0 -> 
+			%% handle in handle_info instead of state since,
+			%% this cover all states, there should be an
+			%% gen_fsm:start_timer_all(...)
+			erlang:start_timer(Config#opt.inhibit, self(), 
+					   inhibit_done),
+			?verbose("inhibit started for: ~w ms",
+				 [Config#opt.inhibit]),
+			true;
+		   true -> false
+		end,
+    State1 = State#state { counter = Config#opt.repeat, 
+			   inhibited = Inhibited },
     do_reactivate(Event, State1).
 
 do_reactivate(_Event, State) ->
-    io:format("DO_REACTIVATE\n"),
+    ?verbose("DO_REACTIVATE",[]),
     %% state_delay(init, State).
     state_rampup(init, State).
 
 do_deactivate(_Event, State) ->
-    io:format("DO_DEACTIVATE\n"),
+    ?verbose("DO_DEACTIVATE",[]),
     transmit_active(0, State),
     state_deact(init, State#state { deactivate=true }).
 
 do_off(State) ->
-    io:format("DO_OFF\n"),
+    ?verbose("DO_OFF",[]),
     _Remained = if is_reference(State#state.tref) ->
 			gen_fsm:cancel_timer(State#state.tref);
 		   true -> 0
@@ -472,6 +498,51 @@ handle_sync_event(_Event, _From, StateName, State) ->
 %%                   {stop, Reason, NewState}
 %% @end
 %%--------------------------------------------------------------------
+handle_info({timeout,_Ref,inhibit_done}, StateName, State) ->
+    ?verbose("inhibitation stopped",[]),
+    {next_state, StateName, State#state { inhibited=false}};
+
+handle_info({Channel,Value={encoder,Delta,_Src}}, StateName, State) ->
+    %% only when state_on?
+    try get_option(Channel, State#state.config) of
+	Value ->
+	    %% wrap/clamp values here!
+	    try set_option(Channel,Value+Delta,State#state.config) of
+		Config -> 
+		    {next_state, StateName, State#state { config=Config }}
+	    catch
+		error:Reason ->
+		    lager:error("dynamic channel setting ~s, encoder ~w crash: ~p",
+				[Channel,Delta,Reason]),
+		    {next_state, StateName, State}
+	    end
+    catch
+	error:Reason ->
+		    lager:error("dynamic channel getting ~s crash: ~p",
+				[Channel,Reason]),
+	    {next_state, StateName, State}
+    end;
+
+handle_info({value,{analog,_V,_Src}}, StateName, State) ->
+    %% Fixme; check valid states where analog values may be written
+    {next_state, StateName, State};
+
+handle_info({Channel,{analog,V,_Src}}, StateName, State) ->
+    %% only when state_on?
+    try set_option(Channel,V,State#state.config) of
+	Config -> 
+	    {next_state, StateName, State#state { config=Config }}
+    catch
+	error:Reason ->
+	    lager:error("dynamic channel setting ~s, analog ~w crash: ~p",
+			[Channel,V,Reason]),
+	    {next_state, StateName, State}
+    end;
+
+handle_info({_Channel,{digital,_Val,_Src}}, StateName, State) ->
+    %% no booean channels yet!
+    {next_state, StateName, State};
+
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -539,10 +610,36 @@ set_option(K, V, Opt) ->
 	wait when  ?is_timeout(V) -> Opt#opt { wait = V };
 	repeat when is_integer(V), V >= -1 -> Opt#opt { repeat = V };
 	feedback when is_boolean(V) -> Opt#opt { feedback = V };
-	analog_min when ?is_uint32(V) -> Opt#opt { analog_min = V };
-	analog_max when ?is_uint32(V) -> Opt#opt { analog_max = V };
+	min_value when ?is_uint32(V) -> Opt#opt { min_value = V };
+	max_value when ?is_uint32(V) -> Opt#opt { max_value = V };
 	ramp_min when ?is_uint32(V) -> Opt#opt { ramp_min = max(20, V) }
     end.
+
+get_option(K, Opt) ->
+    case K of
+	nodeid ->  Opt#opt.nodeid;
+	chan   ->  Opt#opt.chan;
+	default ->  Opt#opt.default;
+	inhibit -> Opt#opt.inhibit;
+	delay   -> Opt#opt.delay;
+	rampup  -> Opt#opt.rampup;
+	rampdown -> Opt#opt.rampdown;
+	sustain   -> Opt#opt.sustain;
+	deact     -> Opt#opt.deact;
+	wait      -> Opt#opt.wait;
+	repeat    -> Opt#opt.repeat;
+	feedback  -> Opt#opt.feedback;
+	min_value -> Opt#opt.min_value;
+	max_value  -> Opt#opt.max_value;
+	ramp_min   -> Opt#opt.ramp_min
+    end.
+
+clamp(_Config, undefined) -> undefined;
+clamp(#opt { max_value=A1, min_value=A0}, Value) ->
+    if A1 >= A0 -> min(A1, max(A0, Value));
+       true -> min(A0, max(A1, Value))
+    end.
+    
 
 make_self(NodeID) ->
     16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff).

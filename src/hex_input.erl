@@ -178,10 +178,10 @@ s_neutral({rfid,Value,Src}, S) ->
 s_neutral({Type,Value,Src}, S) when ?is_uint16(Type) ->
     output(Type,Value,Src,?S_NEUTRAL,S);
 s_neutral(pulse_done, S) ->
-    io:format("s_neutral:pulse_done\n", []),
+    lager:debug("s_neutral:pulse_done", []),
     {next_state, ?S_NEUTRAL, S#s { estep = 0 }};
 s_neutral(_Value, S) ->
-    io:format("garbage ~w seen in state s_neutral\n", [_Value]),
+    lager:debug("garbage ~w seen in state s_neutral", [_Value]),
     {next_state, ?S_NEUTRAL, S}.
 
 
@@ -190,7 +190,7 @@ s_push(pulse, S) ->
     T = gen_fsm:send_event_after((S#s.config)#opt.encoder_ival, pulse),
     encoder_input(S#s.estep, S#s.src, ?S_PUSH,S#s { timer = T });
 s_push(pulse_done, S) ->
-    io:format("s_push:pulse_done (ignore)\n", []),
+    lager:debug("s_push:pulse_done (ignore)", []),
     %% ignored since we probably changed direction
     {next_state, ?S_PUSH, S};
 s_push({digital,0,_Src}, S) ->
@@ -437,7 +437,13 @@ output(Type,Value,Src,State,S) ->
 
 send_output(Type,Value,Src,S) ->
     Output = { Type, Value, Src },
-    lists:foreach(fun(Out) -> hex_server:output(Out, Output) end,
+    lists:foreach(fun({Channel,Out}) -> 
+			  hex_server:output(Out,Channel,Output);
+		     (Out) when Type == digital ->
+			  hex_server:output(Out, Output);
+		     (Out) ->
+			  hex_server:output(Out,value,Output)
+		  end,
 		  (S#s.config)#opt.outputs).
 
 set_options([{Option,Value} | Options], Opt) ->
@@ -502,7 +508,17 @@ set_option(K, V, Opt) ->
 	    Opt#opt { rfid_match_to_digital = V };
 	%% output list
 	output when is_list(V) ->
-	    [ true = ((I >= 1) andalso (I =< 254)) || I <- V],
+	    true = lists:all(
+		     fun({Channel,I}) ->
+			     lists:member(Channel,
+					  [value,inhibit,delay,rampup,sustain,
+					   rampdown,deact,wait,repeat])
+				 andalso is_integer(I) 
+				 andalso (I >= 1) andalso (I =< 254);
+			(I) ->
+			     is_integer(I) 
+				 andalso (I >= 1) andalso (I =< 254)
+		     end, V),
 	    Opt#opt { outputs = V }
     end.
 

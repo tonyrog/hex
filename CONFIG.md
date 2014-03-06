@@ -24,8 +24,11 @@ Specification of HomeExchange (Hex) configuration file
       {input,
        Label::id(),
 	   Pattern::event_pattern(),
-       [input_flag()],[output_id()]
+       [input_flag()],[out_id()|{out_channel(),out_id}]
       }
+
+	out_channel() :: value|inhibit|delay|rampup|sustain|rampdown|
+                     deact|wait|repeat
 
     input_flag() ::
 		springback   |
@@ -59,25 +62,26 @@ Specification of HomeExchange (Hex) configuration file
 
     output() ::
       {output,
-       Label::id(),
+       Label::out_id(),
        [output_flag()],
 	   action()
       }
 
 	output_flag() ::
-		default     :: unsigned32()
+		default     :: unsigned32()  default value
+	    inhbit      :: timeout()
 		delay       :: timeout()
 	    rampup      :: timeout()
 		sustain     :: timeout()
-	    inhbit      :: timeout()
-		deact       :: timeout()
 		rampdown    :: timeout()
+		deact       :: timeout()
 		wait        :: timeout()
 		repeat      :: integer() -1 = pulse forever
 		feedback    :: boolean()
+		min_value   :: uint32()
+		max_value   :: uint32()
         ramp_min    :: uint32() minimum time quant (hard is 20 ms)
-		analog_min  :: uint32()
-		analog_max  :: uint32()
+
 
     action() :: plugin_action() | [{pattern(),plugin_action()}].
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.
@@ -95,6 +99,8 @@ Specification of HomeExchange (Hex) configuration file
 #Common types
 
 	id() :: atom() | integer().
+
+	out_id() :: 1..254
 
 	base_pattern() ::
         unsigned32() |

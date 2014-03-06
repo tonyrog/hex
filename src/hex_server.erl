@@ -33,7 +33,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
--export([output/2, input/2, event/2, transmit/2]).
+-export([output/2, output/3, input/2, event/2, transmit/2]).
 -export([match_value/2, match_pattern/2]).
 
 
@@ -393,14 +393,22 @@ input(I, Value) when is_integer(I); is_atom(I) ->
     end.
 
 %% called from hex_input !
-output(O, Value) when is_integer(O) ->
-    lager:debug("output ~w ~w", [O, Value]),
+output(O, Value) ->
+    output(O,value,Value).
+
+output(O,Channel,Value={Type,_,_}) when 
+      is_atom(Channel), is_integer(O), O >= 1, O =< 254 ->
+    lager:debug("output ~w:~s ~w", [O,Channel,Value]),
     try ets:lookup(?TABLE, {output,O}) of
 	[] -> 
 	    lager:warning("output ~w not running", [O]),
 	    ignore;
 	[{_,Fsm}] ->
-	    gen_fsm:send_event(Fsm, Value)
+	    if Channel =:= value, Type =:= digital ->
+		    gen_fsm:send_event(Fsm, Value);
+	       true ->
+		    Fsm ! {Channel,Value}  %% end up in handle_info
+	    end
     catch
 	error:badarg ->
 	    lager:warning("hex_server not running", []),
