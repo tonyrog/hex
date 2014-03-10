@@ -24,11 +24,11 @@ Specification of HomeExchange (Hex) configuration file
       {input,
        Label::id(),
 	   Pattern::event_pattern(),
-       [input_flag()],[out_id()|{out_channel(),out_id}]
+       [input_flag()],[out_id()|{out_channel(),out_id()}]
       }
 
 	out_channel() :: value|inhibit|delay|rampup|sustain|rampdown|
-                     deact|wait|repeat
+                     deact|wait|repeat|atom()
 
     input_flag() ::
 		springback   |
@@ -68,7 +68,7 @@ Specification of HomeExchange (Hex) configuration file
       }
 
 	output_flag() ::
-		default     :: unsigned32()  default value
+		value       :: uint32()
 	    inhbit      :: timeout()
 		delay       :: timeout()
 	    rampup      :: timeout()
@@ -81,7 +81,17 @@ Specification of HomeExchange (Hex) configuration file
 		min_value   :: uint32()
 		max_value   :: uint32()
         ramp_min    :: uint32() minimum time quant (hard is 20 ms)
+        target	    :: target_spec() 
 
+    target_spec() :: [target_flag()]
+
+	target_flag() ::
+		name      :: atom(),
+		type      :: clamp | wrap
+		in_min    :: uint32()
+		in_max    :: uint32()
+		out_min   :: uint32()
+		out_max   :: uint32()
 
     action() :: plugin_action() | [{pattern(),plugin_action()}].
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.
@@ -103,10 +113,10 @@ Specification of HomeExchange (Hex) configuration file
 	out_id() :: 1..254
 
 	base_pattern() ::
-        unsigned32() |
+        uint32() |
         digital | analog | encoder | rfid |
         variable() |
-		{mask,Mask::unsigned32(),Match::unsigned32()} |
+		{mask,Mask::uint32(),Match::uint32()} |
 		{range,Low::integer(),High::integer()} |
 		{'not',base_pattern()} |
 		{'and',base_pattern(),base_pattern()} |

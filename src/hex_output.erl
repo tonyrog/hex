@@ -54,8 +54,8 @@
 	  out_min = 0        :: uint32(),
 	  out_max = 16#fffff :: uint32(),
 	  %% calculated
-	  pos :: undefined | integer(),  %% #opt.name
-	  delta :: float()               %% (out_max-out_min)/(in_max-in_min)
+	  pos :: integer(),      %% #opt.name, #opt.other => dict
+	  delta :: float()       %% (out_max-out_min)/(in_max-in_min)
 	}).
 %%
 %% note!  a short pulse must be at least 1 ms long, since 
@@ -72,7 +72,8 @@
 	  deact   = 0 :: timeout(),        %% deactivation delay
 	  wait    = 0 :: timeout(),        %% delay between re-activation
 	  repeat  = 0 :: integer(),        %% pulse repeat count
-	  feedback = 0 :: uint1()          %% feedback frames as input 
+	  feedback = 0 :: uint1(),         %% feedback frames as input
+	  other = dict:new() :: dict()     %% others value name => value
 	 }).
 
 -record(state, {
@@ -564,9 +565,16 @@ handle_info(_Info={Name,{encoder,Delta,_Src}}, StateName, State) ->
 	    {next_state, StateName, State};
 	{ok,Target} ->
 	    IConfig = State#state.in_config,
-	    X = element(Target#target.pos, IConfig),
-	    State1 = set_value(Target, X, Delta, State),
-	    {next_state, StateName, State1}
+	    X = case Target#target.pos of
+		    #opt.other ->
+			dict:fetch(Target#target.name, IConfig#opt.other);
+		    Pos ->
+			element(Pos, IConfig)
+		end,
+	    {Value,State1} = set_value(Target, X, Delta, State),
+	    Env = [{Name,Value}],
+	    State2 = action(?HEX_ANALOG,Value,State#state.actions,Env,State1),
+	    {next_state, StateName, State2}
     end;
 
 %% Fixme; check valid states where analog values may be written
@@ -583,10 +591,11 @@ handle_info(_Info={Name,{analog,X,_Src}}, StateName, State) ->
 			[Name, _Info]),
 	    {next_state, StateName, State};
 	{ok,Target} ->
-	    State1 = set_value(Target, X, 0, State),
-	    {next_state, StateName, State1}
+	    {Value,State1} = set_value(Target, X, 0, State),
+	    Env = [{Name,Value}],
+	    State2 = action(?HEX_ANALOG,Value,State#state.actions,Env,State1),
+	    {next_state, StateName, State2}
     end;
-
 handle_info(_Info={Name,{digital,X,_Src}}, StateName, State) ->
     case dict:find(Name, State#state.targets) of
 	error ->
@@ -594,8 +603,10 @@ handle_info(_Info={Name,{digital,X,_Src}}, StateName, State) ->
 			[Name, _Info]),
 	    {next_state, StateName, State};
 	{ok,Target} ->
-	    State1 = set_value(Target, X, 0, State),
-	    {next_state, StateName, State1}
+	    {Value,State1} = set_value(Target, X, 0, State),
+	    Env = [{Name,Value}],
+	    State2 = action(?HEX_DIGITAL,Value,State#state.actions,Env,State1),
+	    {next_state, StateName, State2}
     end;
 
 handle_info(_Info, StateName, State) ->
@@ -654,7 +665,6 @@ set_options([Opt|Options], Config, Targets, State) ->
 	       true ->
 		    {error, {badarg,Opt}}
 	    end;
-
 	{ramp_min,Value} ->
 	    if ?is_uint32(Value) ->
 		    State1 = State#state { ramp_min=min(20,Value) },
@@ -662,22 +672,16 @@ set_options([Opt|Options], Config, Targets, State) ->
 	       true ->
 		    {error, {badarg,Opt}}
 	    end;
-
 	{min_value,Value} when ?is_uint32(Value) ->
 	    {ok,Target} = dict:find(value, Targets),
 	    Target1 = Target#target { out_min = Value },
 	    Targets1 = dict:store(value, Target1, Targets),
 	    set_options(Options, Config, Targets1, State);
-
 	{max_value,Value} when ?is_uint32(Value) ->
 	    {ok,Target} = dict:find(value, Targets),
 	    Target1 = Target#target { out_max = Value },
 	    Targets1 = dict:store(value, Target1, Targets),
 	    set_options(Options, Config, Targets1, State);
-
-
-
-
 	{target,Value} ->
 	    try set_target(Value, Targets) of
 		Targets1 -> set_options(Options, Config, Targets1, State)
@@ -718,7 +722,9 @@ set_option(K, V, Config) ->
 	repeat when is_integer(V), V >= -1 -> Config#opt { repeat = V };
 	feedback when V =:= true -> Config#opt  { feedback = 1 };
 	feedback when V =:= false -> Config#opt  { feedback = 0 };
-	feedback when ?is_uint1(V) -> Config#opt  { feedback = V }
+	feedback when ?is_uint1(V) -> Config#opt  { feedback = V };
+	_ when ?is_uint32(V) ->
+	    Config#opt { other = dict:store(K,V,Config#opt.other) }
     end.
 
 %% set or update a target
@@ -761,8 +767,17 @@ set_value(Target, X, Delta, State) ->
     Pos = Target#target.pos,
     IConfig = State#state.in_config,
     OConfig = State#state.out_config,
-    State#state {  in_config = setelement(Pos, IConfig, Xi),
-		   out_config = setelement(Pos, OConfig, Xo) }.
+    State1 =
+	if Pos =:= #opt.other ->
+		IOther = dict:store(Target#target.name, Xi, IConfig#opt.other),
+		OOther = dict:store(Target#target.name, Xo, OConfig#opt.other),
+		State#state { in_config = IConfig#opt { other = IOther },
+			      out_config = OConfig#opt { other = OOther }};
+	   true ->
+		State#state {  in_config  = setelement(Pos, IConfig, Xi),
+			       out_config = setelement(Pos, OConfig, Xo) }
+	end,
+    {Xo,State1}.
 
 
 map_value(X, #target { in_min=X0, out_min=Y0, delta=D }) ->
@@ -771,15 +786,25 @@ map_value(X, #target { in_min=X0, out_min=Y0, delta=D }) ->
 %% map all input configs through targets dictionary
 map_config(ConfigIn, Targets) ->
     dict:fold(
-      fun(_Name,Target=#target{pos=Pos},ConfigOut) ->
+      fun (Name,Target=#target{pos=#opt.other},ConfigOut) ->
+	      X = case dict:find(Name, ConfigIn#opt.other) of
+		      error -> 0;
+		      {ok,X0} -> X0
+		  end,
+	      Xi = constrain_in_value(X, Target),
+	      Xo = map_value(Xi, Target),
+	      ?verbose("target ~s in:~w, constrained:~w, mapped:~w",
+		       [Name,X,Xi,Xo]),
+	      Other = dict:store(Name, Xo, ConfigOut#opt.other),
+	      ConfigOut#opt { other = Other };
+	  (Name,Target=#target{pos=Pos},ConfigOut) ->
 	      X = element(Pos,ConfigIn),
 	      Xi = constrain_in_value(X, Target),
 	      Xo = map_value(Xi, Target),
 	      ?verbose("target ~s in:~w, constrained:~w, mapped:~w",
-		       [_Name,X,Xi,Xo]),
+		       [Name,X,Xi,Xo]),
 	      setelement(Pos, ConfigOut, Xo)
       end, ConfigIn, Targets).
-
 
 constrain_in_value(X, Target) when Target#target.type =:= wrap ->
     wrap_in_value(X, Target);
@@ -835,7 +860,7 @@ target_pos(K) ->
 	wait      -> #opt.wait;
 	repeat    -> #opt.repeat;
 	feedback  -> #opt.feedback;
-	_ -> undefined
+	_ ->         #opt.other  %% (put in dict)
     end.
 
 get_options([nodeid|Ks], Config, State, Acc) ->
@@ -849,7 +874,6 @@ get_options([K|Ks], Config, State, Acc) ->
 get_options([], _Config, _State, Acc) ->
     lists:reverse(Acc).
 
-
 get_option(K, Config) ->
     case K of
 	value     -> Config#opt.value;
@@ -861,7 +885,8 @@ get_option(K, Config) ->
 	deact     -> Config#opt.deact;
 	wait      -> Config#opt.wait;
 	repeat    -> Config#opt.repeat;
-	feedback  -> Config#opt.feedback
+	feedback  -> Config#opt.feedback;
+	_ -> dict:fetch(K, Config#opt.other)
     end.
 
 make_self(NodeID) ->

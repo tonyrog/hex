@@ -102,6 +102,12 @@ add_input(I, Label, Sig, Flags, Output, Err) ->
 		    ok -> Err;
 		    Error1 -> [{input,Label,Error1}|Err]
 		end,
+	    Err2 = 
+		case is_output(Output) of
+		    true -> Err1;
+		    false ->
+			[{input,Label,{error,{bad_output,Output}}}|Err1]
+		end,
 	    case hex_pattern(Sig) of
 		{ok,Pattern} ->
 		    Input = 
@@ -109,9 +115,9 @@ add_input(I, Label, Sig, Flags, Output, Err) ->
 				     signal = Pattern,
 				     flags = Flags,
 				     output = Output },
-		    { [Input|I], Err1 };
+		    { [Input|I], Err2 };
 		Error ->
-		    {I, [{input,Label,Error}|Err1]}
+		    {I, [{input,Label,Error}|Err2]}
 	    end;
 	_ ->
 	    {I, [{input,Label,{error,ealready}} | Err]}
@@ -160,6 +166,16 @@ add_transmit(T, Label, App, Flags, Sig, Err) ->
 	_ ->
 	    {T, [{transmit,Label,{error,ealready}} | Err]}
     end.
+
+is_output([{Name,I}|Out]) when is_atom(Name), is_integer(I), I > 0, I < 255 ->
+    is_output(Out);
+is_output([I|Out]) when is_integer(I), I > 0, I < 255 ->
+    is_output(Out);
+is_output([]) ->
+    true;
+is_output(_) ->
+    false.
+
 
 %% translate event pattern into internal form
 hex_pattern({ID,Chan,Type,Value}) ->

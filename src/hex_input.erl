@@ -84,7 +84,7 @@
 	  rfid_match = 0 :: uint32(),
 	  rfid_mask  = 0 :: uint32(),
 	  rfid_match_to_digital :: boolean(),
-	  outputs = [] :: [uint8()]
+	  outputs = [] :: [uint8()|{atom(),uint8()}]
 	}).
 
 -record(s,
@@ -437,12 +437,12 @@ output(Type,Value,Src,State,S) ->
 
 send_output(Type,Value,Src,S) ->
     Output = { Type, Value, Src },
-    lists:foreach(fun({Channel,Out}) -> 
-			  hex_server:output(Out,Channel,Output);
-		     (Out) when Type == digital ->
-			  hex_server:output(Out, Output);
-		     (Out) ->
-			  hex_server:output(Out,value,Output)
+    lists:foreach(fun({Name,I}) when is_atom(Name) -> 
+			  hex_server:output(I,Name,Output);
+		     (I) when Type == digital ->
+			  hex_server:output(I, Output);
+		     (I) ->
+			  hex_server:output(I,value,Output)
 		  end,
 		  (S#s.config)#opt.outputs).
 
@@ -509,15 +509,10 @@ set_option(K, V, Opt) ->
 	%% output list
 	output when is_list(V) ->
 	    true = lists:all(
-		     fun({Channel,I}) ->
-			     lists:member(Channel,
-					  [value,inhibit,delay,rampup,sustain,
-					   rampdown,deact,wait,repeat])
-				 andalso is_integer(I) 
-				 andalso (I >= 1) andalso (I =< 254);
+		     fun({Name,I}) when is_atom(Name) ->
+			     is_integer(I) andalso (I >= 1) andalso (I =< 254);
 			(I) ->
-			     is_integer(I) 
-				 andalso (I >= 1) andalso (I =< 254)
+			     is_integer(I) andalso (I >= 1) andalso (I =< 254)
 		     end, V),
 	    Opt#opt { outputs = V }
     end.
