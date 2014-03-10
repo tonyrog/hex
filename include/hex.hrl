@@ -43,6 +43,7 @@
 	{'or',base_pattern(),base_pattern()}.
 			
 -type pattern() :: base_pattern() | [base_pattern()].
+-type uint1() :: 0..1.
 -type uint8() :: 0..16#ff.
 -type uint16() :: 0..16#ffff.
 -type uint32() :: 0..16#ffffffff.
@@ -50,6 +51,7 @@
 -type int16()  :: -16#8000..16#7fff.
 -type int32()  :: -16#80000000..16#7fffffff.
 
+-define(is_uint1(X),  (((X) band (bnot 16#1)) == 0) ).
 -define(is_uint4(X),  (((X) band (bnot 16#f)) == 0) ).
 -define(is_uint7(X),  (((X) band (bnot 16#7f)) == 0) ).
 -define(is_uint8(X),  (((X) band (bnot 16#ff)) == 0) ).

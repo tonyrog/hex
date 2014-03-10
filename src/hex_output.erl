@@ -29,6 +29,8 @@
 %% API
 -export([start_link/2]).
 -export([validate_flags/1]).
+-export([setopts/2]).
+-export([getopts/2]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
@@ -44,39 +46,50 @@
 	 
 -define(SERVER, ?MODULE).
 
-%% note!  a short pulse must be at least 1 milli long, since 
+-record(target, {
+	  name :: atom(),                %% name of target
+	  type = clamp :: clamp | wrap,  %% style of value
+	  in_min  = 0        :: uint32(),
+	  in_max  = 16#fffff :: uint32(),
+	  out_min = 0        :: uint32(),
+	  out_max = 16#fffff :: uint32(),
+	  %% calculated
+	  pos :: undefined | integer(),  %% #opt.name
+	  delta :: float()               %% (out_max-out_min)/(in_max-in_min)
+	}).
+%%
+%% note!  a short pulse must be at least 1 ms long, since 
 %% sustain = 0 means that output goes into state_on.
 %%
+
 -record(opt, {
-	  nodeid  = 0 :: uint32(),    %% id of hex node
-	  chan    = 0 :: uint8(),     %% output number 1..254	  
-	  default = 0 :: uint32(),    %% default value 
-	  inhibit = 0 :: timeout(),   %% ignore delay
-	  delay   = 0 :: timeout(),   %% activation delay
-	  rampup  = 0 :: timeout(),   %% ramp up time
-	  sustain = 0 :: timeout(),   %% time to stay active 
-	  rampdown = 0 :: timeout(),  %% ramp down time
-	  deact   = 0 :: timeout(),         %% deactivation delay
-	  wait    = 0 :: timeout(),         %% delay between re-activation
-	  repeat  = 0 :: integer(),         %% pulse repeat count
-	  feedback = false :: boolean(),    %% feedback frames as input 
-	  min_value = 0 :: uint32(),        %% min value
-	  max_value = 16#ffff :: uint32(),  %% max value
-	  ramp_min = 20 :: uint32()         %% min time quanta in during ramp
+	  value   = 0 :: uint32(),         %% value
+	  inhibit = 0 :: timeout(),        %% ignore delay
+	  delay   = 0 :: timeout(),        %% activation delay
+	  rampup  = 0 :: timeout(),        %% ramp up time
+	  sustain = 0 :: timeout(),        %% time to stay active 
+	  rampdown = 0 :: timeout(),       %% ramp down time
+	  deact   = 0 :: timeout(),        %% deactivation delay
+	  wait    = 0 :: timeout(),        %% delay between re-activation
+	  repeat  = 0 :: integer(),        %% pulse repeat count
+	  feedback = 0 :: uint1()          %% feedback frames as input 
 	 }).
 
 -record(state, {
-	  config  = #opt {} :: #opt{},   %% config values
-	  value   = 0 :: uint32(),       %% current value
-	  counter = 0 :: uint32(),       %% repeat counter
+	  nodeid  = 0 :: uint32(),         %% id of hex node
+	  chan    = 0 :: uint8(),          %% output number 1..254
+	  ramp_min = 20 :: uint32(),       %% min time quanta in during ramp
+	  targets :: dict(),               %% dictionary of name -> #target {}
+	  in_config = #opt {} :: #opt{},   %% config values
+	  out_config :: #opt{},            %% mapped config values
+	  counter = 0 :: uint32(),         %% repeat counter
 	  tref    = undefined :: undefined | reference(),
 	  tramp   = undefined :: undefined | reference(),
 	  deactivate = false :: boolean(), %% set while deactivate
 	  inhibited  = false :: boolean(), %% disallow activation
-	  env     = [],                  %% enironment for last event
+	  env     = [],                    %% enironment for last event
 	  actions = []
 	 }).
-
 
 -define(STATE(Name), io:format("state: ~w\n", [(Name)])).
 -define(verbose(Fmt,As), io:format((Fmt)++"\n", (As))).
@@ -85,8 +98,14 @@
 %%% API
 %%%===================================================================
 
+setopts(Pid, Flags) ->
+    gen_fsm:sync_send_all_state_event(Pid, {setopts,Flags}).
+
+getopts(Pid, Flags) ->
+    gen_fsm:sync_send_all_state_event(Pid, {getopts,Flags}).
+
 validate_flags(Flags) ->
-    case set_options(Flags, #opt {}) of
+    case set_options(Flags, #opt {}, dict:new(), #state{}) of
 	{ok,_} -> ok;
 	Error -> Error
     end.
@@ -123,12 +142,17 @@ start_link(Flags, Actions) ->
 %% @end
 %%--------------------------------------------------------------------
 init({Flags,Actions}) ->
-    case set_options(Flags, #opt {}) of
-	{ok, Config} ->
-	    Value = clamp(Config, Config#opt.default),
-	    State = #state { config = Config, actions = Actions },
-	    State1 = output_value(?HEX_ANALOG, Value, State),
-	    {ok, state_off, State1};
+    Value = #target { name=value, type=clamp, delta=1.0 },
+    Targets = dict:from_list([{value,Value}]),
+    case set_options(Flags, #opt { }, Targets, #state{}) of
+	{ok, IConfig, Targets1, State1} ->
+	    OConfig = map_config(IConfig, Targets1),
+	    State2 = State1#state {
+		       in_config  = IConfig, 
+		       out_config = OConfig,
+		       targets = Targets1, 
+		       actions = Actions },
+	    {ok, state_off, State2};
 	Error ->
 	    {stop, Error}
     end.
@@ -151,12 +175,14 @@ init({Flags,Actions}) ->
 state_off(Event={digital,1,Src}, State) ->
     if State#state.inhibited ->
 	    ?verbose("inhibited in state_off", []),
-	        {next_state, state_off, State};
+	    {next_state, state_off, State};
        true ->
 	    do_activate(Event, State#state { env = [{source,Src}] })
     end;
+
+%% FIXME: when do we process analog input 
 state_off({analog,Val,Src}, State) ->
-    %% fixme: only in state_on / state_sustain?
+
     Env = [{value,Val}, {source,Src}],
     State1 = action(?HEX_ANALOG, Val, State#state.actions, Env, State),
     {next_state, state_off, State1};
@@ -165,6 +191,8 @@ state_off(_Event, State) ->
 
 state_on({digital,0,Src}, State) ->
     do_deactivate(init, State#state { env = [{source,Src}] });
+
+%% FIXME: when do we process analog input 
 state_on({analog,Val,Src}, S) ->
     Env = [{value,Val}, {source,Src}],
     S1 = action(?HEX_ANALOG, Val, S#state.actions, Env, S),
@@ -177,7 +205,7 @@ state_on(_Event, S) ->
 %% by sending an digital 0 signal
 state_delay(init, State) ->
     ?STATE(delay),
-    Time = (State#state.config)#opt.delay,
+    Time = (State#state.out_config)#opt.delay,
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, delay),
 	    State1 = State#state { tref = TRef },
@@ -196,27 +224,29 @@ state_delay(_Event, S) ->
     {next_state, state_delay, S}.
 
 %% Ramping up output over rampup time milliseconds
-state_rampup(init, State=#state { config=Config }) ->
+state_rampup(init, State) ->
     ?STATE(rampup),
-    Time = Config#opt.rampup,
+    Time = (State#state.out_config)#opt.rampup,
     if Time > 0 ->
-	    %% FIXME: start from A=State#state.value !!!
-	    #opt { max_value=A1, min_value=A0, ramp_min=Tm} = Config,
-	    A = State#state.value,
+	    Tm = State#state.ramp_min,
+	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
+	    A = (State#state.in_config)#opt.value,
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
 	    Td = max(Tm, Td0),
 	    T = 1-((A-A0)/Ad),
 	    Time1 = trunc(T*Time),
 	    ?verbose("rampup: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w", 
-		      [Time, Time1, Ad, Td0, Td, A]),
+		     [Time, Time1, Ad, Td0, Td, A]),
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
 	    State1 = State#state { tref=TRef,tramp=TRamp },
-	    State2 = output_value(?HEX_ANALOG, 0, State1),
+	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
 	    {next_state, state_rampup, State2};
        true ->
-	    state_sustain(init, State)
+	    #target { in_max=A } = Trg = value_target(State),
+	    State1 = output_value(?HEX_ANALOG, A, Trg, State),
+	    state_sustain(init, State1)
     end;
 state_rampup({timeout,TRef,{delta,Td}},State)
   when State#state.tref =:= TRef ->
@@ -224,14 +254,14 @@ state_rampup({timeout,TRef,{delta,Td}},State)
 	false ->
 	    {next_state, state_rampup, State#state { tref=undefined} };
 	Tr ->
-	    Config = State#state.config,
-	    #opt { max_value=A1, min_value=A0, rampup=Time } = Config,
+	    Time = (State#state.out_config)#opt.rampup,
+	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
 	    T = (Time - Tr)/Time,
 	    A = trunc((A1-A0)*T + A0),
 	    ?verbose("rampup: T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
-	    State2 = output_value(?HEX_ANALOG, A, State1),
+	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
 	    {next_state, state_rampup, State2}
     end;
 state_rampup({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
@@ -241,9 +271,9 @@ state_rampup({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
 	    ok
     end,
     State1 = State#state { tramp=undefined, tref=undefined },
-    #opt { max_value=A } = State#state.config,
+    #target { in_max=A } = Trg = value_target(State),
     ?verbose("rampup: T=~w A=~w", [1.0, A]),
-    State2 = output_value(?HEX_ANALOG, A, State1),
+    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
     state_sustain(init, State2);
 state_rampup(Event={digital,0,Src}, State) ->
     lager:debug("rampup cancelled from", [Src]),
@@ -263,7 +293,7 @@ state_sustain(init, State) ->
     ?STATE(sustain),
     Env = [{value,1}|State#state.env],
     State1 = action(?HEX_DIGITAL, 1, State#state.actions, Env, State),
-    Time = (State#state.config)#opt.sustain,
+    Time = (State#state.out_config)#opt.sustain,
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, sustain),
 	    State2 = State1#state { tref = TRef },
@@ -284,7 +314,7 @@ state_sustain(_Event, S) ->
 %% deactivation delay
 state_deact(init, State) ->
     ?STATE(deact),
-    Time = (State#state.config)#opt.deact,
+    Time = (State#state.out_config)#opt.deact,
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, deact),
 	    State1 = State#state { tref = TRef },
@@ -310,12 +340,13 @@ state_deact(_Event, S) ->
     {next_state, state_deact, S}.
 
 %% Ramping down output over rampup time milliseconds
-state_rampdown(init, State=#state { config=Config }) ->
+state_rampdown(init, State) ->
     ?STATE(rampdown),
-    Time = Config#opt.rampdown,
+    Time = (State#state.out_config)#opt.rampdown,
     if Time > 0 ->
-	    #opt { max_value=A1, min_value=A0, ramp_min=Tm} = Config,
-	    A = State#state.value,
+	    Tm = State#state.ramp_min,
+	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
+	    A = (State#state.in_config)#opt.value,
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
 	    Td = max(Tm, Td0),
@@ -326,10 +357,12 @@ state_rampdown(init, State=#state { config=Config }) ->
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
 	    State1 = State#state { tref=TRef,tramp=TRamp },
-	    State2 = output_value(?HEX_ANALOG, A, State1),
+	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
 	    {next_state, state_rampdown, State2};
        true ->
-	    state_wait(init, State)
+	    #target { in_min=A } = Trg = value_target(State),
+	    State1 = output_value(?HEX_ANALOG, A, Trg, State),
+	    state_wait(init, State1)
     end;
 state_rampdown({timeout,TRef,{delta,Td}},State)
   when State#state.tref =:= TRef ->
@@ -337,14 +370,14 @@ state_rampdown({timeout,TRef,{delta,Td}},State)
 	false ->
 	    {next_state, state_rampdown, State#state {tref=undefined} };
 	Tr ->
-	    Config = State#state.config,
-	    #opt { max_value=A1, min_value=A0, rampdown=Time } = Config,
+	    Time = (State#state.out_config)#opt.rampdown,
+	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
 	    T = (Time-Tr)/Time,
 	    A = trunc((A0-A1)*T + A1),
 	    ?verbose("rampdown: T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
-	    State2 = output_value(?HEX_ANALOG, A, State1),
+	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
 	    {next_state, state_rampdown, State2}
     end;
 state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
@@ -354,9 +387,9 @@ state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
 	    ok
     end,
     State1 = State#state { tramp=undefined, tref=undefined },
-    #opt { min_value=A } = State#state.config,
+    #target { in_min=A } = Trg = value_target(State),
     ?verbose("rampdown: T=~w A=~w", [1.0, A]),
-    State2 = output_value(?HEX_ANALOG, A, State1),
+    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
     state_wait(init, State2);
 state_rampdown(_Event={digital,1,Src}, State) ->
     if State#state.inhibited ->
@@ -380,7 +413,7 @@ state_wait(init, State) ->
     ?STATE(wait),
     Env = [{value,0}, State#state.env],
     State1 = action(?HEX_DIGITAL, 0, State#state.actions, Env, State),
-    WaitTime = (State1#state.config)#opt.wait,
+    WaitTime = (State1#state.out_config)#opt.wait,
     if State1#state.deactivate =:= true;
        State1#state.counter =:= 0 ->
 	    do_off(State1);
@@ -407,22 +440,22 @@ state_wait(_Event, State) ->
     lager:debug("state_wait: ignore event ~p", [_Event]),
     {next_state, state_wait, State}.
 
-
-do_activate(Event, State=#state{config=Config}) ->
+do_activate(Event, State) ->
     ?verbose("DO_ACTIVATE",[]),
     transmit_active(1, State),
-    Inhibited = if Config#opt.inhibit > 0 -> 
+    OConfig = State#state.out_config,
+    Inhibited = if OConfig#opt.inhibit > 0 -> 
 			%% handle in handle_info instead of state since,
 			%% this cover all states, there should be an
 			%% gen_fsm:start_timer_all(...)
-			erlang:start_timer(Config#opt.inhibit, self(), 
+			erlang:start_timer(OConfig#opt.inhibit, self(), 
 					   inhibit_done),
 			?verbose("inhibit started for: ~w ms",
-				 [Config#opt.inhibit]),
+				 [OConfig#opt.inhibit]),
 			true;
 		   true -> false
 		end,
-    State1 = State#state { counter = Config#opt.repeat, 
+    State1 = State#state { counter = OConfig#opt.repeat, 
 			   inhibited = Inhibited },
     do_reactivate(Event, State1).
 
@@ -481,6 +514,26 @@ handle_event(_Event, StateName, State) ->
 %%                   {stop, Reason, Reply, NewState}
 %% @end
 %%--------------------------------------------------------------------
+
+handle_sync_event({getopts,Flags}, _From, StateName, State) ->
+    try get_options(Flags, State#state.in_config, State, []) of
+	Result ->
+	    {reply, {ok,Result}, StateName, State}
+    catch
+	error:Reason ->
+	    {reply, {error,Reason}, StateName, State}
+    end;
+
+handle_sync_event({setopts,Opts}, _From, StateName, State) ->
+    case set_options(Opts, State#state.in_config,State#state.targets,State) of
+	{ok, IConfig, Targets, State1} ->
+	    %% FIXME: map to output configs here!
+	    {reply, ok, StateName, 
+	     State1#state { in_config=IConfig, targets=Targets }};
+	Error ->
+	    {reply, Error, StateName, State}
+    end;
+
 handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
     {reply, Reply, StateName, State}.
@@ -502,46 +555,46 @@ handle_info({timeout,_Ref,inhibit_done}, StateName, State) ->
     ?verbose("inhibitation stopped",[]),
     {next_state, StateName, State#state { inhibited=false}};
 
-handle_info({Channel,Value={encoder,Delta,_Src}}, StateName, State) ->
-    %% only when state_on?
-    try get_option(Channel, State#state.config) of
-	Value ->
-	    %% wrap/clamp values here!
-	    try set_option(Channel,Value+Delta,State#state.config) of
-		Config -> 
-		    {next_state, StateName, State#state { config=Config }}
-	    catch
-		error:Reason ->
-		    lager:error("dynamic channel setting ~s, encoder ~w crash: ~p",
-				[Channel,Delta,Reason]),
-		    {next_state, StateName, State}
-	    end
-    catch
-	error:Reason ->
-		    lager:error("dynamic channel getting ~s crash: ~p",
-				[Channel,Reason]),
-	    {next_state, StateName, State}
+%% only when state_on?
+handle_info(_Info={Name,{encoder,Delta,_Src}}, StateName, State) ->
+    case dict:find(Name, State#state.targets) of
+	error ->
+	    lager:error("target ~s not found: event ~p", 
+			[Name, _Info]),
+	    {next_state, StateName, State};
+	{ok,Target} ->
+	    IConfig = State#state.in_config,
+	    X = element(Target#target.pos, IConfig),
+	    State1 = set_value(Target, X, Delta, State),
+	    {next_state, StateName, State1}
     end;
 
-handle_info({value,{analog,_V,_Src}}, StateName, State) ->
-    %% Fixme; check valid states where analog values may be written
+%% Fixme; check valid states where analog values may be written
+handle_info(_Info={value,{analog,_V,_Src}}, StateName, State) ->
     {next_state, StateName, State};
 
-handle_info({Channel,{analog,V,_Src}}, StateName, State) ->
-    %% only when state_on?
-    try set_option(Channel,V,State#state.config) of
-	Config -> 
-	    {next_state, StateName, State#state { config=Config }}
-    catch
-	error:Reason ->
-	    lager:error("dynamic channel setting ~s, analog ~w crash: ~p",
-			[Channel,V,Reason]),
-	    {next_state, StateName, State}
+%% only when state_on?
+handle_info(_Info={Name,{analog,X,_Src}}, StateName, State) ->
+    case dict:find(Name, State#state.targets) of
+	error ->
+	    lager:error("target ~s not found: event ~p", 
+			[Name, _Info]),
+	    {next_state, StateName, State};
+	{ok,Target} ->
+	    State1 = set_value(Target, X, 0, State),
+	    {next_state, StateName, State1}
     end;
 
-handle_info({_Channel,{digital,_Val,_Src}}, StateName, State) ->
-    %% no booean channels yet!
-    {next_state, StateName, State};
+handle_info(_Info={Name,{digital,X,_Src}}, StateName, State) ->
+    case dict:find(Name, State#state.targets) of
+	error ->
+	    lager:error("target ~s not found: event ~p", 
+			[Name, _Info]),
+	    {next_state, StateName, State};
+	{ok,Target} ->
+	    State1 = set_value(Target, X, 0, State),
+	    {next_state, StateName, State1}
+    end;
 
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
@@ -576,99 +629,269 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+value_target(State) ->
+    %% maybe cache in State?
+    dict:fetch(value,State#state.targets).
+
 %%
 %% Set output options
 %%
-set_options([{Option,Value} | Options], Opt) ->
-    try set_option(Option, Value, Opt) of
-	Opt1 -> set_options(Options, Opt1)
-    catch
-	error:_ ->
-	    {error, {badarg, {Option, Value}}}
+set_options([Opt|Options], Config, Targets, State) ->
+    case Opt of
+	{nodeid,Value} ->
+	    if ?is_uint32(Value) ->
+		    State1 = State#state { nodeid=Value },
+		    set_options(Options, Config, Targets, State1);
+	       true ->
+		    {error, {badarg,Opt}}
+	    end;
+	{chan,Value} ->
+	    if ?is_uint8(Value) ->
+		    State1 = State#state { chan=Value },
+		    set_options(Options, Config, Targets, State1);
+	       true ->
+		    {error, {badarg,Opt}}
+	    end;
+
+	{ramp_min,Value} ->
+	    if ?is_uint32(Value) ->
+		    State1 = State#state { ramp_min=min(20,Value) },
+		    set_options(Options, Config, Targets, State1);
+	       true ->
+		    {error, {badarg,Opt}}
+	    end;
+
+	{min_value,Value} when ?is_uint32(Value) ->
+	    {ok,Target} = dict:find(value, Targets),
+	    Target1 = Target#target { out_min = Value },
+	    Targets1 = dict:store(value, Target1, Targets),
+	    set_options(Options, Config, Targets1, State);
+
+	{max_value,Value} when ?is_uint32(Value) ->
+	    {ok,Target} = dict:find(value, Targets),
+	    Target1 = Target#target { out_max = Value },
+	    Targets1 = dict:store(value, Target1, Targets),
+	    set_options(Options, Config, Targets1, State);
+
+
+
+
+	{target,Value} ->
+	    try set_target(Value, Targets) of
+		Targets1 -> set_options(Options, Config, Targets1, State)
+	    catch
+		error:_ ->
+		    {error, {badarg, Opt}}
+	    end;
+	{Option,Value} ->
+	    try set_option(Option, Value, Config) of
+		Config1 -> set_options(Options,Config1,Targets,State)
+	    catch
+		error:_ ->
+		    {error, {badarg, Opt}}
+	    end;
+	_ when is_atom(Opt) ->
+	    try set_option(Opt, true, Config) of
+		Config1 -> set_options(Options,Config1,Targets,State)
+	    catch
+		error:_ ->
+		    {error, {badarg,Opt}}
+	    end;
+	_ ->
+	    {error, {badarg,Opt}}
     end;
-set_options([Option | Options], Opt) ->
-    try set_option(Option, true, Opt) of
-	Opt1 -> set_options(Options, Opt1)
-    catch
-	error:_ ->
-	    {error, {badarg,Option}}
+set_options([], Config, Targets, State) ->
+    {ok, Config, Targets, State}.
+
+set_option(K, V, Config) ->
+    case K of
+	value when ?is_uint32(V)  ->  Config#opt { value = V };
+	inhibit when ?is_timeout(V) -> Config#opt  { inhibit = V };
+	delay   when ?is_timeout(V) -> Config#opt  { delay = V };
+	rampup  when ?is_timeout(V) -> Config#opt  { rampup = V };
+	rampdown when ?is_timeout(V) -> Config#opt { rampdown = V };
+	sustain when ?is_timeout(V) -> Config#opt  { sustain = V };
+	deact when ?is_timeout(V) -> Config#opt    { deact = V };
+	wait when  ?is_timeout(V) -> Config#opt    { wait = V };
+	repeat when is_integer(V), V >= -1 -> Config#opt { repeat = V };
+	feedback when V =:= true -> Config#opt  { feedback = 1 };
+	feedback when V =:= false -> Config#opt  { feedback = 0 };
+	feedback when ?is_uint1(V) -> Config#opt  { feedback = V }
+    end.
+
+%% set or update a target
+set_target(Options, Dict) ->
+    {name,Name} = proplists:lookup(name, Options),
+    case dict:find(Name, Dict) of
+	error ->
+	    set_target(Options, #target {}, Dict);
+	{ok,Target} ->
+	    set_target(Options, Target, Dict)
+    end.
+
+set_target([{K,V}|Opts], Target, Dict) ->
+    case K of
+	name when is_atom(V) -> 
+	    set_target(Opts, Target#target { name=V }, Dict);
+	type when V =:= clamp; V =:= wrap ->
+	    set_target(Opts, Target#target { type=V }, Dict);
+	in_min when ?is_uint32(V) -> 
+	    set_target(Opts, Target#target { in_min = V }, Dict);
+	in_max when ?is_uint32(V) -> 
+	    set_target(Opts, Target#target { in_max = V }, Dict);
+	out_min when ?is_uint32(V) -> 
+	    set_target(Opts, Target#target { out_min = V }, Dict);
+	out_max when ?is_uint32(V) ->
+	    set_target(Opts, Target#target { out_max = V }, Dict)
     end;
-set_options([], Opt) ->
-    {ok, Opt}.
+set_target([], Target, Dict) ->
+    #target { in_min = X0, in_max = X1, out_min = Y0, out_max = Y1 } = Target,
+    Delta = (Y1-Y0) / (X1 - X0),
+    Name = Target#target.name,
+    Target1 = Target#target { delta = Delta, pos = target_pos(Name) },
+    dict:store(Target1#target.name, Target1, Dict).
 
-set_option(K, V, Opt) ->
+set_value(Target, X, Delta, State) ->
+    Xi = constrain_in_value(X + Delta, Target),
+    Xo = map_value(Xi, Target),
+    ?verbose("set_value target:~s delta:~w in:~w, constrained:~w, mapped:~w",
+	     [Target#target.name,Delta,X,Xi,Xo]),
+    Pos = Target#target.pos,
+    IConfig = State#state.in_config,
+    OConfig = State#state.out_config,
+    State#state {  in_config = setelement(Pos, IConfig, Xi),
+		   out_config = setelement(Pos, OConfig, Xo) }.
+
+
+map_value(X, #target { in_min=X0, out_min=Y0, delta=D }) ->
+    trunc((X - X0) * D + Y0).
+
+%% map all input configs through targets dictionary
+map_config(ConfigIn, Targets) ->
+    dict:fold(
+      fun(_Name,Target=#target{pos=Pos},ConfigOut) ->
+	      X = element(Pos,ConfigIn),
+	      Xi = constrain_in_value(X, Target),
+	      Xo = map_value(Xi, Target),
+	      ?verbose("target ~s in:~w, constrained:~w, mapped:~w",
+		       [_Name,X,Xi,Xo]),
+	      setelement(Pos, ConfigOut, Xo)
+      end, ConfigIn, Targets).
+
+
+constrain_in_value(X, Target) when Target#target.type =:= wrap ->
+    wrap_in_value(X, Target);
+constrain_in_value(X, Target) when Target#target.type =:= clamp ->
+    clamp_in_value(X, Target).
+
+clamp_in_value(X, #target { in_min=X0, in_max=X1 }) ->
+    if X1 >= X0 -> min(X1, max(X0, X));
+       true -> min(X0, max(X1, X))
+    end.
+
+constrain_out_value(X, Target) when Target#target.type =:= wrap ->
+    wrap_out_value(X, Target);
+constrain_out_value(X, Target) when Target#target.type =:= clamp ->
+    clamp_out_value(X, Target).
+
+clamp_out_value(Y, #target { out_min=Y0, out_max=Y1 }) ->
+    if Y1 >= Y0 -> min(Y1, max(Y0, Y));
+       true -> min(Y0, max(Y1, Y))
+    end.
+
+wrap_in_value(X, #target { in_min=X0, in_max=X1 }) ->
+    if X1 >= X0 ->
+	    mod((X - X0),(X1 - X0 + 1)) + X0;
+       X1 < X0 ->
+	    mod((X - X1),(X0 - X1 + 1)) + X1
+    end.
+
+wrap_out_value(Y, #target { out_min=Y0, out_max=Y1 }) ->
+    if Y1 >= Y0 ->
+	    mod((Y - Y0),(Y1 - Y0 + 1)) + Y0;
+       Y1 < Y0 ->
+	    mod((Y - Y1),(Y0 - Y1 + 1)) + Y1
+    end.
+
+mod(A,N) ->
+    A1 = A rem N,
+    if A1 < 0 -> 
+	    A1 + N;
+       true ->
+	    A1
+    end.
+
+target_pos(K) ->
     case K of
-	nodeid when ?is_uint32(V)   ->  Opt#opt { nodeid = V };
-	chan when ?is_uint8(V)      ->  Opt#opt { chan = V };
-	default when ?is_uint32(V)  ->  Opt#opt { default = V };
-	inhibit when ?is_timeout(V) -> Opt#opt { inhibit = V };
-	delay   when ?is_timeout(V) -> Opt#opt { delay = V };
-	rampup  when ?is_timeout(V) -> Opt#opt { rampup = V };
-	rampdown when ?is_timeout(V) -> Opt#opt { rampdown = V };
-	sustain when ?is_timeout(V) -> Opt#opt { sustain = V };
-	deact when ?is_timeout(V) -> Opt#opt { deact = V };
-	wait when  ?is_timeout(V) -> Opt#opt { wait = V };
-	repeat when is_integer(V), V >= -1 -> Opt#opt { repeat = V };
-	feedback when is_boolean(V) -> Opt#opt { feedback = V };
-	min_value when ?is_uint32(V) -> Opt#opt { min_value = V };
-	max_value when ?is_uint32(V) -> Opt#opt { max_value = V };
-	ramp_min when ?is_uint32(V) -> Opt#opt { ramp_min = max(20, V) }
+	value     -> #opt.value;
+	inhibit   -> #opt.inhibit;
+	delay     -> #opt.delay;
+	rampup    -> #opt.rampup;
+	rampdown  -> #opt.rampdown;
+	sustain   -> #opt.sustain;
+	deact     -> #opt.deact;
+	wait      -> #opt.wait;
+	repeat    -> #opt.repeat;
+	feedback  -> #opt.feedback;
+	_ -> undefined
     end.
 
-get_option(K, Opt) ->
+get_options([nodeid|Ks], Config, State, Acc) ->
+    get_options(Ks, Config, State, [{nodeid,State#state.nodeid}|Acc]);
+get_options([chan|Ks], Config, State, Acc) ->
+    get_options(Ks, Config, State, [{chan,State#state.chan}|Acc]);
+get_options([ramp_min|Ks], Config, State, Acc) ->
+    get_options(Ks, Config, State, [{ramp_min,State#state.ramp_min}|Acc]);
+get_options([K|Ks], Config, State, Acc) ->
+    get_options(Ks, Config, State, [{K,get_option(K,Config)}|Acc]);
+get_options([], _Config, _State, Acc) ->
+    lists:reverse(Acc).
+
+
+get_option(K, Config) ->
     case K of
-	nodeid ->  Opt#opt.nodeid;
-	chan   ->  Opt#opt.chan;
-	default ->  Opt#opt.default;
-	inhibit -> Opt#opt.inhibit;
-	delay   -> Opt#opt.delay;
-	rampup  -> Opt#opt.rampup;
-	rampdown -> Opt#opt.rampdown;
-	sustain   -> Opt#opt.sustain;
-	deact     -> Opt#opt.deact;
-	wait      -> Opt#opt.wait;
-	repeat    -> Opt#opt.repeat;
-	feedback  -> Opt#opt.feedback;
-	min_value -> Opt#opt.min_value;
-	max_value  -> Opt#opt.max_value;
-	ramp_min   -> Opt#opt.ramp_min
+	value     -> Config#opt.value;
+	inhibit   -> Config#opt.inhibit;
+	delay     -> Config#opt.delay;
+	rampup    -> Config#opt.rampup;
+	rampdown  -> Config#opt.rampdown;
+	sustain   -> Config#opt.sustain;
+	deact     -> Config#opt.deact;
+	wait      -> Config#opt.wait;
+	repeat    -> Config#opt.repeat;
+	feedback  -> Config#opt.feedback
     end.
-
-clamp(_Config, undefined) -> undefined;
-clamp(#opt { max_value=A1, min_value=A0}, Value) ->
-    if A1 >= A0 -> min(A1, max(A0, Value));
-       true -> min(A0, max(A1, Value))
-    end.
-    
 
 make_self(NodeID) ->
     16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff).
 
 %% output activity on/off
 transmit_active(Active, State) ->
-    Opt = State#state.config,
-    Signal = #hex_signal { id=make_self(Opt#opt.nodeid),
-			   chan=Opt#opt.chan,
+    Signal = #hex_signal { id=make_self(State#state.nodeid),
+			   chan=State#state.chan,
 			   type=?HEX_OUTPUT_ACTIVE,
 			   value=Active,
-			   source={output,Opt#opt.chan}},
+			   source={output,State#state.chan}},
     Env = [],
     hex_server:transmit(Signal, Env).
 
 %% generate an action value and store value
-output_value(_Type, Value, State) ->
+output_value(_Type, Vin, Target, State) ->
+    Vout = map_value(Vin, Target),
     %% call action matching !
-    State#state { value = Value }.
+    IConfig = State#state.in_config,
+    OConfig = State#state.out_config,
+    State#state {  in_config = IConfig#opt { value = Vin },
+		   out_config = OConfig#opt { value = Vout }}.
 
 %% output "virtual" feedback
 feedback(Type,Value, State) ->
-    Opt = State#state.config,
-    if Opt#opt.feedback ->
-	    Signal = #hex_signal { id=make_self(Opt#opt.nodeid),
-				   chan=Opt#opt.chan,
+    if (State#state.out_config)#opt.feedback =:= 1 ->
+	    Signal = #hex_signal { id=make_self(State#state.nodeid),
+				   chan=State#state.chan,
 				   type=Type,
 				   value=Value,
-				   source={output,Opt#opt.chan}},
+				   source={output,State#state.chan}},
 	    Env = [],
 	    hex_server:event(Signal, Env);
        true ->
