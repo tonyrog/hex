@@ -772,8 +772,6 @@ map_value(X, #target { in_min=X0, out_min=Y0, delta=D }) ->
 map_config(ConfigIn, Targets) ->
     dict:fold(
       fun(_Name,Target=#target{pos=Pos},ConfigOut) ->
-	      io:format("Target=~p pos=~w\n", [Target,Pos]),
-
 	      X = element(Pos,ConfigIn),
 	      Xi = constrain_in_value(X, Target),
 	      Xo = map_value(Xi, Target),
