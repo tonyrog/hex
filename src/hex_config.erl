@@ -127,7 +127,7 @@ add_output(O,Label,Flags,Actions,Err) ->
 		end,
 	    Err2 = case validate_actions(Actions) of
 		       ok -> Err1;
-		       Error2 -> [{event,Label,Error2}|Err1]
+		       Error2 -> [{output,Label,Error2}|Err1]
 		   end,
 	    Output =
 		#hex_output { label = Label,

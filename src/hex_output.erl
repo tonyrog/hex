@@ -106,7 +106,7 @@ getopts(Pid, Flags) ->
 
 validate_flags(Flags) ->
     case set_options(Flags, #opt {}, dict:new(), #state{}) of
-	{ok,_} -> ok;
+	{ok,_,_,_} -> ok;
 	Error -> Error
     end.
 
@@ -142,7 +142,7 @@ start_link(Flags, Actions) ->
 %% @end
 %%--------------------------------------------------------------------
 init({Flags,Actions}) ->
-    Value = #target { name=value, type=clamp, delta=1.0 },
+    Value = #target { name=value, type=clamp, delta=1.0, pos=#opt.value },
     Targets = dict:from_list([{value,Value}]),
     case set_options(Flags, #opt { }, Targets, #state{}) of
 	{ok, IConfig, Targets1, State1} ->
@@ -182,8 +182,8 @@ state_off(Event={digital,1,Src}, State) ->
 
 %% FIXME: when do we process analog input 
 state_off({analog,Val,Src}, State) ->
-
     Env = [{value,Val}, {source,Src}],
+    %% Map me?
     State1 = action(?HEX_ANALOG, Val, State#state.actions, Env, State),
     {next_state, state_off, State1};
 state_off(_Event, State) ->
@@ -570,8 +570,10 @@ handle_info(_Info={Name,{encoder,Delta,_Src}}, StateName, State) ->
     end;
 
 %% Fixme; check valid states where analog values may be written
-handle_info(_Info={value,{analog,_V,_Src}}, StateName, State) ->
-    {next_state, StateName, State};
+handle_info(_Info={value,{analog,Val,_Src}}, StateName, State) ->
+    Env = [{value,Val}],
+    State1 = action(?HEX_ANALOG, Val, State#state.actions, Env, State),
+    {next_state, StateName, State1};
 
 %% only when state_on?
 handle_info(_Info={Name,{analog,X,_Src}}, StateName, State) ->
@@ -770,6 +772,8 @@ map_value(X, #target { in_min=X0, out_min=Y0, delta=D }) ->
 map_config(ConfigIn, Targets) ->
     dict:fold(
       fun(_Name,Target=#target{pos=Pos},ConfigOut) ->
+	      io:format("Target=~p pos=~w\n", [Target,Pos]),
+
 	      X = element(Pos,ConfigIn),
 	      Xi = constrain_in_value(X, Target),
 	      Xo = map_value(Xi, Target),

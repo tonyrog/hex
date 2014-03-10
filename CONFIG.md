@@ -186,13 +186,13 @@ Input rules
 
 Output configuration and actions
 
-	{output, 1, [digital],
+	{output, 1, [],
 		{hex_gpio, [{board, cpu}, {pin_reg,0}, {pin, 17}]} }.
 
-	{output, 2, [digital],
+	{output, 2, [],
 		{hex_gpio, [{board, piface}, {pin_reg,0}, {pin, 1}]} }.
 
-    {output, 3, [digital,{inhibit,10000}],
+    {output, 3, [{inhibit,10000}],
 		[ {1, {hex_email,
 		      [{account,foo},
                {subject, "rfzone"}, {sender,"from@mail.com"},
@@ -209,7 +209,7 @@ Output configuration and actions
                {body, "Alert, door is closed!\n"}]}}
 		   ]}.
 
-	{output, 4, [digital,analog,{analog_min,0},{analog_max,10},{style, smooth}],
+	{output, 4, [{analog_min,0},{analog_max,10},{style, smooth}],
 		{hex_tellstick,
 			[{protocol,ikea}, {unit,1}, {channel,1}]} }.
 

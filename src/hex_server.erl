@@ -267,7 +267,7 @@ start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
 	     State) ->
     case start_plugin(App, in, Flags) of
 	ok ->
-	    lager:debug("add_event: ~p ~p", [App,Flags]),  
+	    lager:debug("add_event: ~p ~p", [App,Flags]),
 	    {ok,Ref} = App:add_event(Flags, Signal, ?MODULE),
 	    lager:debug("event ~w started ~w", [L, Ref]),
 	    EvtList = [{L,Ref} | State#state.evt_list],
@@ -304,6 +304,7 @@ start_plugin(App, Dir, Flags) ->
     end.
 
 init_plugin(App, Dir, Flags) ->
+    lager:debug("init_event: ~p ~p", [App,Flags]),
     case App:init_event(Dir, Flags) of
 	ok ->
 	    lager:info("~w:~w event ~p initiated", [App,Dir,Flags]),
