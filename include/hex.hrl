@@ -47,9 +47,11 @@
 -type uint8() :: 0..16#ff.
 -type uint16() :: 0..16#ffff.
 -type uint32() :: 0..16#ffffffff.
+-type uint64() :: 0..16#ffffffffffffffff.
 -type int8()   :: -16#80..16#7f.
 -type int16()  :: -16#8000..16#7fff.
 -type int32()  :: -16#80000000..16#7fffffff.
+-type int64()  :: -16#8000000000000000..16#7fffffffffffffff.
 
 -define(is_uint1(X),  (((X) band (bnot 16#1)) == 0) ).
 -define(is_uint4(X),  (((X) band (bnot 16#f)) == 0) ).
@@ -61,9 +63,12 @@
 -define(is_uint25(X), (((X) band (bnot 16#1ffffff)) == 0) ).
 -define(is_uint29(X), (((X) band (bnot 16#1fffffff)) == 0) ).
 -define(is_uint32(X), (((X) band (bnot 16#ffffffff)) == 0) ).
+-define(is_uint64(X), (((X) band (bnot 16#ffffffffffffffff)) == 0) ).
 -define(is_int8(X), ( ( ((X) >= -16#80) andalso ((X) =< 16#7f)) )).
 -define(is_int16(X), ( ( ((X) >= -16#8000) andalso ((X) =< 16#7fff)) )).
 -define(is_int32(X), ( ( ((X) >= -16#80000000) andalso ((X) =< 16#7fffffff)) )).
+-define(is_int64(X), ( ( ((X) >= -16#8000000000000000) 
+			 andalso ((X) =< 16#7fffffffffffffff)) )).
 -define(is_timeout(T), ?is_uint32(T)).
 
 -record(hex_signal,
@@ -97,7 +102,7 @@
 	  label :: atom() | integer(),
 	  app :: atom(),               %% application name of plugin
 	  flags :: [{atom(),term()}],  %% event application flags
-	  signal :: #hex_pattern{}     %% signal to send/match
+	  signal :: #hex_signal{}      %% signal to send/match
 	}).
 
 -record(hex_output,

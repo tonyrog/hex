@@ -79,12 +79,21 @@ add_event(E, Label, App, Flags, Sig, Err) ->
 		       Error1 -> [{event,Label,Error1}|Err]
 		   end,
 	    case hex_pattern(Sig) of
-		{ok,Pattern} ->
+		{ok,P} ->
+		    %% translate pattern into a specialized signal form
+		    %% field may be environment id (atom) or integer!
+		    Signal = #hex_signal {
+				id     = P#hex_pattern.id,
+				chan   = P#hex_pattern.chan,
+				type   = P#hex_pattern.type,
+				value  = P#hex_pattern.value,
+				source = source
+			       },
 		    Event =
 			#hex_event { label=Label,
 				     app=App,
 				     flags=Flags,
-				     signal=Pattern },
+				     signal=Signal },
 		    {[Event|E],Err1};
 		Error2 ->
 		    {E, [{event,Label,Error2}|Err1]}

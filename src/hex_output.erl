@@ -596,7 +596,10 @@ handle_info(_Info={Name,{analog,X,_Src}}, StateName, State) ->
 	    State2 = action(?HEX_ANALOG,Value,State#state.actions,Env,State1),
 	    {next_state, StateName, State2}
     end;
-handle_info(_Info={Name,{digital,X,_Src}}, StateName, State) ->
+handle_info(_Info={Name,{Type,X,_Src}}, StateName, State) 
+  when Type =:= digital; 
+       Type =:= ?HEX_DIGITAL;
+       Type =:= ?HEX_OUTPUT_ACTIVE ->
     case dict:find(Name, State#state.targets) of
 	error ->
 	    lager:error("target ~s not found: event ~p", 
@@ -890,10 +893,15 @@ get_option(K, Config) ->
     end.
 
 make_self(NodeID) ->
-    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff).
+    if NodeID band 16#02000000 =/= 0 ->
+	    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff);
+       true ->
+	    (2#0011 bsl 9) bor (NodeID band 16#7f)
+    end.
 
 %% output activity on/off
 transmit_active(Active, State) ->
+    feedback(?HEX_OUTPUT_ACTIVE,Active,State),
     Signal = #hex_signal { id=make_self(State#state.nodeid),
 			   chan=State#state.chan,
 			   type=?HEX_OUTPUT_ACTIVE,

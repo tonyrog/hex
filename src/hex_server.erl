@@ -50,7 +50,9 @@
 	  in_list  = []    :: [{Label::integer(), Pid::pid()}],
 	  evt_list = []    :: [{Label::integer(), Ref::reference()}],
 	  transmit_rules = []  :: [#hex_transmit{}],
-	  input_rules = [] :: [#hex_input{}]
+	  input_rules = [] :: [#hex_input{}],
+	  plugin_up = []   :: [{App::atom(), Mon::reference()}],
+	  plugin_down = [] :: [App::atom()]
 	 }).
 
 %%%===================================================================
@@ -132,7 +134,16 @@ handle_call(reload, _From, State) ->
 	    {reply, ok, State1};
 	Error ->
 	    {reply, Error, State}
-    end;    
+    end;
+handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid), 
+						   is_atom(AppName) ->
+    io:format("application ~w [~w] joined\n", [AppName,Pid]),
+    AppMon = erlang:monitor(process,Pid),
+    %% schedule load of event defintions for App in a while
+    self() ! {init_plugin, AppName},
+    PluginUp = [{AppName,AppMon} | State#state.plugin_up],
+    PluginDown = lists:delete(AppName, State#state.plugin_down),
+    {reply, ok, State#state { plugin_up = PluginUp, plugin_down = PluginDown }};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -157,6 +168,16 @@ handle_cast({transmit,Signal=#hex_signal{}}, State) ->
     run_transmit(Signal, State#state.transmit_rules),
     {noreply, State};
 
+handle_cast({join,Pid,AppName}, State) when is_pid(Pid), 
+					    is_atom(AppName) ->
+    io:format("application ~w [~w] joined\n", [AppName,Pid]),
+    AppMon = erlang:monitor(process,Pid),
+    %% schedule load of event defintions for App in a while
+    self() ! {init_plugin, AppName},
+    PluginUp = [{AppName,AppMon} | State#state.plugin_up],
+    PluginDown = lists:delete(AppName, State#state.plugin_down),
+    {noreply, State#state { plugin_up = PluginUp, plugin_down = PluginDown }};
+
 handle_cast(_Cast, State) ->
     lager:debug("got cast: ~p", [_Cast]),
     {noreply, State}.
@@ -180,6 +201,21 @@ handle_info(reload, State) ->
 	    {noreply, State}
     end;
 
+handle_info({init_plugin, AppName}, State) ->
+    io:format("INIT PLUGIN: ~s\n", [AppName]),
+    %% reload all events for Plugin AppName
+    {noreply, State};
+
+handle_info({'DOWN',Ref,process,_Pid,_Reason}, State) ->
+    case lists:keytake(Ref, 2, State#state.plugin_up) of
+	false ->
+	    {noreply, State};
+	{value,{App,_Ref},PluginUp} ->
+	    io:format("PUGIN DOWN: ~s reason=~p\n", [App,_Reason]),
+	    PluginDown = [App|State#state.plugin_down],
+	    {noreply, State#state { plugin_up   = PluginUp, 
+				    plugin_down = PluginDown }}
+    end;
 handle_info(_Info, State) ->
     lager:debug("got info: ~p", [_Info]),
     {noreply, State}.
@@ -420,19 +456,17 @@ transmit(Signal=#hex_signal{}, _Env) ->
     gen_server:cast(?SERVER, {transmit, Signal}).
 
 %% generate input event to dispatcher
-event(Signal=#hex_signal{}, _Env) ->
-    gen_server:cast(?SERVER, {event, Signal});
-event(Pattern=#hex_pattern{}, Env) ->
-    Signal =
-	#hex_signal { id    = event_value(Pattern#hex_pattern.id, Env),
-		      chan  = event_value(Pattern#hex_pattern.chan, Env),
-		      type  = event_value(Pattern#hex_pattern.type, Env),
-		      value = event_value(Pattern#hex_pattern.value, Env)
+event(S0=#hex_signal{}, Env) ->
+    S = #hex_signal { id    = event_value(S0#hex_signal.id, Env),
+		      chan  = event_value(S0#hex_signal.chan, Env),
+		      type  = event_value(S0#hex_signal.type, Env),
+		      value = event_value(S0#hex_signal.value, Env),
+		      source = event_value(S0#hex_signal.source, Env)
 		    },
-    gen_server:cast(?SERVER, {event, Signal}).
+    gen_server:cast(?SERVER, {event, S}).
 
-
-event_value(Value, _) when is_integer(Value) ->
-    Value;
 event_value(Var, Env) when is_atom(Var) ->
-    proplists:get_value(Var, Env, 0).
+    proplists:get_value(Var, Env, 0);
+event_value(Value, _Env) ->
+    Value.
+
