@@ -18,6 +18,8 @@ Current plugins
 - hex_smtp - [https://github.com/tonyrog/hex_smtp](https://github.com/tonyrog/hex_smtp)
 - hex_debug - [https://github.com/tonyrog/hex_debug](https://github.com/tonyrog/hex_debug)
 - hex_piface - [https://github.com/tonyrog/hex_piface](https://github.com/tonyrog/hex_piface)
+- hex_wse - [https://github.com/tonyrog/hex_wse](https://github.com/tonyrog/hex_wse)
+- hex_epx - [https://github.com/tonyrog/hex_epx](https://github.com/tonyrog/hex_epx)
 
 In progress and planned plugins
 
