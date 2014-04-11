@@ -1,0 +1,394 @@
+module hex_sms {
+  namespace "http://rogvall.se/hex/hex_sms";
+  prefix "hex_sms";
+  container config {
+    container hex_sms {
+      container hex_sms_in {
+        leaf reg_exp {
+          type string;
+          default [];
+        }
+        leaf body {
+          type string;
+          default [];
+        }
+        leaf smsc {
+          type string {
+            pattern "\\+?[0-9]*";
+          }
+        }
+        leaf rp {
+          type boolean;
+          default false;
+        }
+        leaf udhi {
+          type boolean;
+          default false;
+        }
+        list udh {
+          key id;
+          leaf id {
+            type uint32;
+          }
+          choice hdr {
+            case concat8 {
+              container concat8 {
+                leaf ref {
+                  type uint8;
+                }
+                leaf total {
+                  type uint8;
+                }
+                leaf segment {
+                  type uint8;
+                }
+              }
+            }
+            case concat16 {
+              container concat16 {
+                leaf ref {
+                  type uint16;
+                }
+                leaf total {
+                  type uint8;
+                }
+                leaf segment {
+                  type uint8;
+                }
+              }
+            }
+            case concat {
+              container concat {
+                leaf ref {
+                  type uint16;
+                }
+                leaf total {
+                  type uint8;
+                }
+                leaf segment {
+                  type uint8;
+                }
+              }
+            }
+            case port8 {
+              container port8 {
+                leaf dst {
+                  type uint8;
+                }
+                leaf src {
+                  type uint8;
+                }
+              }
+            }
+            case port16 {
+              container port16 {
+                leaf dst {
+                  type uint16;
+                }
+                leaf src {
+                  type uint16;
+                }
+              }
+            }
+            case port {
+              container port {
+                leaf dst {
+                  type uint16;
+                }
+                leaf src {
+                  type uint16;
+                }
+              }
+            }
+          }
+        }
+        leaf srr {
+          type boolean;
+          default false;
+        }
+        leaf mref {
+          type uint8;
+          default 0;
+        }
+        leaf vpf {
+          type enumeration {
+            enum none;
+            enum relative;
+            enum enhanced;
+            enum absolute;
+          }
+          default none;
+        }
+        choice vp {
+          case none {
+            leaf none {
+              type empty;
+            }
+          }
+          case relative {
+            leaf relative {
+              type uint32;
+            }
+          }
+          case absolute {
+            leaf absolute {
+              type string {
+                pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[\\+\\-]\\d{2}:\\d{2})";
+              }
+            }
+          }
+          default none;
+        }
+        leaf addr {
+          type string {
+            pattern "\\+?[0-9]*";
+          }
+        }
+        leaf pid {
+          type uint8;
+          default 0;
+        }
+        leaf dcs {
+          type uint8;
+        }
+        leaf type {
+          type enumeration {
+            enum message;
+            enum data;
+            enum message_waiting;
+          }
+          default message;
+        }
+        leaf class {
+          type enumeration {
+            enum alert;
+            enum me;
+            enum sim;
+            enum te;
+          }
+          default alert;
+        }
+        leaf alphabet {
+          type enumeration {
+            enum default;
+            enum octet;
+            enum ucs2;
+            enum reserved;
+          }
+          default default;
+        }
+        leaf compression {
+          type enumeration {
+            enum compressed;
+            enum uncompressed;
+          }
+          default uncompressed;
+        }
+        leaf wait_type {
+          type enumeration {
+            enum voicemail;
+            enum fax;
+            enum email;
+            enum other;
+          }
+          default other;
+        }
+        leaf ref {
+          type uint16;
+          default 1;
+        }
+      }
+      container hex_sms_out {
+        leaf body {
+          type string;
+          default [];
+        }
+        leaf smsc {
+          type string {
+            pattern "\\+?[0-9]*";
+          }
+        }
+        leaf rp {
+          type boolean;
+          default false;
+        }
+        leaf udhi {
+          type boolean;
+          default false;
+        }
+        list udh {
+          key id;
+          leaf id {
+            type uint32;
+          }
+          choice hdr {
+            case concat8 {
+              container concat8 {
+                leaf ref {
+                  type uint8;
+                }
+                leaf total {
+                  type uint8;
+                }
+                leaf segment {
+                  type uint8;
+                }
+              }
+            }
+            case concat16 {
+              container concat16 {
+                leaf ref {
+                  type uint16;
+                }
+                leaf total {
+                  type uint8;
+                }
+                leaf segment {
+                  type uint8;
+                }
+              }
+            }
+            case concat {
+              container concat {
+                leaf ref {
+                  type uint16;
+                }
+                leaf total {
+                  type uint8;
+                }
+                leaf segment {
+                  type uint8;
+                }
+              }
+            }
+            case port8 {
+              container port8 {
+                leaf dst {
+                  type uint8;
+                }
+                leaf src {
+                  type uint8;
+                }
+              }
+            }
+            case port16 {
+              container port16 {
+                leaf dst {
+                  type uint16;
+                }
+                leaf src {
+                  type uint16;
+                }
+              }
+            }
+            case port {
+              container port {
+                leaf dst {
+                  type uint16;
+                }
+                leaf src {
+                  type uint16;
+                }
+              }
+            }
+          }
+        }
+        leaf srr {
+          type boolean;
+          default false;
+        }
+        leaf mref {
+          type uint8;
+          default 0;
+        }
+        leaf vpf {
+          type enumeration {
+            enum none;
+            enum relative;
+            enum enhanced;
+            enum absolute;
+          }
+          default none;
+        }
+        choice vp {
+          case none {
+            leaf none {
+              type empty;
+            }
+          }
+          case relative {
+            leaf relative {
+              type uint32;
+            }
+          }
+          case absolute {
+            leaf absolute {
+              type string {
+                pattern "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[\\+\\-]\\d{2}:\\d{2})";
+              }
+            }
+          }
+          default none;
+        }
+        leaf addr {
+          type string {
+            pattern "\\+?[0-9]*";
+          }
+        }
+        leaf pid {
+          type uint8;
+          default 0;
+        }
+        leaf dcs {
+          type uint8;
+        }
+        leaf type {
+          type enumeration {
+            enum message;
+            enum data;
+            enum message_waiting;
+          }
+          default message;
+        }
+        leaf class {
+          type enumeration {
+            enum alert;
+            enum me;
+            enum sim;
+            enum te;
+          }
+          default alert;
+        }
+        leaf alphabet {
+          type enumeration {
+            enum default;
+            enum octet;
+            enum ucs2;
+            enum reserved;
+          }
+          default default;
+        }
+        leaf compression {
+          type enumeration {
+            enum compressed;
+            enum uncompressed;
+          }
+          default uncompressed;
+        }
+        leaf wait_type {
+          type enumeration {
+            enum voicemail;
+            enum fax;
+            enum email;
+            enum other;
+          }
+          default other;
+        }
+        leaf ref {
+          type uint16;
+          default 1;
+        }
+      }
+    }
+  }
+}

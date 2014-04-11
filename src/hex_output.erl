@@ -31,6 +31,7 @@
 -export([validate_flags/1]).
 -export([setopts/2]).
 -export([getopts/2]).
+-export([event_spec/0]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3,
@@ -73,6 +74,7 @@
 	  wait    = 0 :: timeout(),        %% delay between re-activation
 	  repeat  = 0 :: integer(),        %% pulse repeat count
 	  feedback = 0 :: uint1(),         %% feedback frames as input
+	  transmit = 0 :: uint1(),         %% transmit frames 
 	  other = dict:new() :: dict()     %% others value name => value
 	 }).
 
@@ -106,10 +108,118 @@ getopts(Pid, Flags) ->
     gen_fsm:sync_send_all_state_event(Pid, {getopts,Flags}).
 
 validate_flags(Flags) ->
-    case set_options(Flags, #opt {}, dict:new(), #state{}) of
-	{ok,_,_,_} -> ok;
-	Error -> Error
-    end.
+    hex:validate_flags(Flags, event_spec()).
+%%    case set_options(Flags, #opt {}, dict:new(), #state{}) of
+%%	{ok,_,_,_} -> ok;
+%%	Error -> Error
+%%    end.
+
+event_spec() ->
+    [
+     {leaf, nodeid, [{type, uint32, []},
+		     {default, 0, []}]},
+     {leaf, chan, [{type, uint8, []},
+		   {default, 0, []}]},
+     {leaf, ramp_min, [{type, uint32, []},
+		       {default, 20, []},
+		       {description, "The min step in ms for each output "
+			"change in ramp -up or -down.", []}
+		      ]},
+     {leaf, min_value, [{type,uint32, []},
+			{default, 0, []},
+			{description, "same as target.value.out_min", []}
+		       ]},
+     {leaf, max_value, [{type,uint32, []},
+			{default, 16#ffff, []},
+			{description, "same as target.value.out_max", []}
+			]},
+     {leaf, value, [{type,uint32, []},
+		    {default, 0, []},
+		    %% {config, false, []},
+		    {description, "The input value", []}
+		   ]},
+     {leaf, inhibit, [{type,uint32, []},
+		      {default, 0, []},
+		      {description, "Inhibit re-activation for ms",[]}
+		     ]},
+     {leaf, delay, [{type,uint32,[]},
+		    {default,0,[]},
+		    {description, "Delay in ms before activation of output."
+		     " If output is deactivated before this timeout "
+		     "then the output is never activated.", []}
+		   ]},
+     {leaf, rampup, [{type,uint32,[]},
+		     {default,0,[]},
+		     {description, "The time in ms for the output signal "
+		      " to reach it's max_value from its min_value.", []}
+		     ]},
+     {leaf, rampdown, [{type,uint32,[]},
+		       {default,0,[]},
+		       {description, "The time in ms for the output signal "
+			" to reach it's min_value from its max_value.", []}
+		      ]},
+     {leaf, sustain, [{type,uint32,[]},
+		      {default,0,[]},
+		      {description, "The time in ms the output should stay at "
+		       "its maximum value before rampdown starts. A value of 0 "
+		       "means forever or until a deactivation signal arrives.",
+		       []}
+		      ]},
+     {leaf, deact, [{type,uint32,[]},
+		    {default,0,[]},
+		    {description, "Deactivation delay in ms. If output is "
+		     "reactivated again before this timeout the output is "
+		     "never deactivated.", []}
+		    ]},
+     {leaf, wait, [{type,uint32,[]},		  
+		   {default,0,[]},
+		   {description, "Delay in ms before next pulse, used when "
+		    "repeat is set to a non zero value.", []}
+		  ]},
+     {leaf, repeat, [{type, int32, 
+		      [{range, [{-1,16#7fffffff}], []}]},
+		     {default,0,[]},
+		     {description, "Pulse repeat count. A value of -1 means "
+		      "that the output repeat forever, or until a "
+		      "desctivation signal arrives.", []}
+		    ]},
+     {leaf,feedback,[{type, boolean, []},
+		     {default, false, []},
+		     {description, "Feedback the output signal as an "
+		      "input signal. Can be useful when implementing "
+		      "time delays etc.", []}
+		    ]},
+     {leaf,transmit,[{type, boolean, []},
+		     {default, false, []},
+		     {description, "Transmit the signal using the "
+		      "transmit configration. This is used to implement "
+		      "signal distribution. A CAN transmit module allow "
+		      "all nodes in the network to monitor the output "
+		      "actions.", []}
+		    ]},
+     {list,target,
+      [{description, 
+	"Declare the name of the id in the action spec that "
+	"will receive the scaled/mapped value. This is mandatory "
+	"for all values destined for action.", []},
+       {key, name, []},
+       {leaf, name, [{type,string,[]},
+		     {mandatory, true, []}]},
+       {leaf, type, [{type,enumeration,
+		      [{enum,clamp,[]},{enum,wrap,[]}]},
+		     {default, clamp, []},
+		     {description, "Input value mapping.", []}
+		    ]},
+       {leaf, in_min, [{type, uint32, []},
+		       {default, 0, []}]},
+       {leaf, in_max, [{type, uint32, []},
+		       {default, 16#ffff, []}]},
+       {leaf, out_min, [{type, uint32, []},
+		       {default, 0, []}]},
+       {leaf, out_max, [{type, uint32, []},
+			{default, 16#ffff, []}]}
+      ]}
+    ].
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -149,7 +259,7 @@ init({Flags,Actions}) ->
 	{ok, IConfig, Targets1, State1} ->
 	    OConfig = map_config(IConfig, Targets1),
 	    State2 = State1#state {
-		       in_config  = IConfig, 
+		       in_config  = IConfig,
 		       out_config = OConfig,
 		       targets = Targets1, 
 		       actions = Actions },
@@ -576,15 +686,10 @@ handle_info(_Info={Name,{encoder,Delta,_Src}}, StateName, State) ->
 	    State2 = action(?HEX_ANALOG,Value,State#state.actions,Env,State1),
 	    {next_state, StateName, State2}
     end;
-
-%% Fixme; check valid states where analog values may be written
-handle_info(_Info={value,{analog,Val,_Src}}, StateName, State) ->
-    Env = [{value,Val}],
-    State1 = action(?HEX_ANALOG, Val, State#state.actions, Env, State),
-    {next_state, StateName, State1};
-
 %% only when state_on?
-handle_info(_Info={Name,{analog,X,_Src}}, StateName, State) ->
+handle_info(_Info={Name,{Type,X,_Src}}, StateName, State) when
+      Type =:= analog;
+      Type =:= ?HEX_ANALOG ->
     case dict:find(Name, State#state.targets) of
 	error ->
 	    lager:error("target ~s not found: event ~p", 
@@ -593,7 +698,8 @@ handle_info(_Info={Name,{analog,X,_Src}}, StateName, State) ->
 	{ok,Target} ->
 	    {Value,State1} = set_value(Target, X, 0, State),
 	    Env = [{Name,Value}],
-	    State2 = action(?HEX_ANALOG,Value,State#state.actions,Env,State1),
+	    State2 = action(?HEX_ANALOG,Value,State#state.actions,
+			    Env,State1),
 	    {next_state, StateName, State2}
     end;
 handle_info(_Info={Name,{Type,X,_Src}}, StateName, State) 
@@ -611,7 +717,6 @@ handle_info(_Info={Name,{Type,X,_Src}}, StateName, State)
 	    State2 = action(?HEX_DIGITAL,Value,State#state.actions,Env,State1),
 	    {next_state, StateName, State2}
     end;
-
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -726,6 +831,9 @@ set_option(K, V, Config) ->
 	feedback when V =:= true -> Config#opt  { feedback = 1 };
 	feedback when V =:= false -> Config#opt  { feedback = 0 };
 	feedback when ?is_uint1(V) -> Config#opt  { feedback = V };
+	transmit when V =:= true -> Config#opt  { transmit = 1 };
+	transmit when V =:= false -> Config#opt  { transmit = 0 };
+	transmit when ?is_uint1(V) -> Config#opt  { transmit = V };
 	_ when ?is_uint32(V) ->
 	    Config#opt { other = dict:store(K,V,Config#opt.other) }
     end.
@@ -901,14 +1009,27 @@ make_self(NodeID) ->
 
 %% output activity on/off
 transmit_active(Active, State) ->
-    feedback(?HEX_OUTPUT_ACTIVE,Active,State),
     Signal = #hex_signal { id=make_self(State#state.nodeid),
 			   chan=State#state.chan,
 			   type=?HEX_OUTPUT_ACTIVE,
 			   value=Active,
 			   source={output,State#state.chan}},
     Env = [],
+    feedback_signal(Signal, Env, State),
     hex_server:transmit(Signal, Env).
+
+feedback_signal(Signal, Env, State) when 
+      (State#state.out_config)#opt.feedback =:= 1 ->
+    hex_server:event(Signal, Env);
+feedback_signal(_Signal, _Env, _State) ->
+    ok.
+
+transmit_signal(Signal, Env, State) when 
+      (State#state.out_config)#opt.transmit =:= 1 ->
+    hex_server:transmit(Signal, Env);
+transmit_signal(_Signal, _Env, _State) ->
+    ok.
+
 
 %% generate an action value and store value
 output_value(_Type, Vin, Target, State) ->
@@ -921,20 +1042,18 @@ output_value(_Type, Vin, Target, State) ->
 
 %% output "virtual" feedback
 feedback(Type,Value, State) ->
-    if (State#state.out_config)#opt.feedback =:= 1 ->
-	    Signal = #hex_signal { id=make_self(State#state.nodeid),
-				   chan=State#state.chan,
-				   type=Type,
-				   value=Value,
-				   source={output,State#state.chan}},
-	    Env = [],
-	    hex_server:event(Signal, Env);
-       true ->
-	    ok
-    end.
+    Signal = #hex_signal { id=make_self(State#state.nodeid),
+			   chan=State#state.chan,
+			   type=Type,
+			   value=Value,
+			   source={output,State#state.chan}},
+    Env = [],
+    feedback_signal(Signal, Env, State),
+    transmit_signal(Signal, Env, State).
 
 
 action(Type, Value, Action, Env, S) ->
+    lager:debug("action type=~.16B, value=~w, env=~w\n", [Type,Value,Env]),
     %% fixme: probably better to convert to analog, then
     %% have feedback input to remap to digital again.
     feedback(Type, Value, S),

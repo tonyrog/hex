@@ -1,0 +1,264 @@
+module hex_epx {
+  namespace "http://rogvall.se/hex/hex_epx";
+  prefix "hex_epx";
+  container config {
+    container hex_epx {
+      container hex_epx_in {
+        leaf type {
+          type enumeration {
+            enum button;
+            enum slider;
+            enum value;
+            enum rectangle;
+            enum ellipse;
+            enum line;
+            enum image;
+            enum text;
+          }
+          mandatory true;
+        }
+        leaf id {
+          type string;
+          mandatory true;
+        }
+        leaf x {
+          type int32;
+          default 0;
+        }
+        leaf y {
+          type int32;
+          default 0;
+        }
+        leaf width {
+          type uint32;
+          default 32;
+        }
+        leaf height {
+          type uint32;
+          default 32;
+        }
+        leaf text {
+          type string;
+          default [];
+        }
+        leaf image {
+          type string;
+        }
+        container font {
+          leaf name {
+            type string;
+          }
+          leaf resolution {
+            type int32;
+          }
+          leaf weight {
+            type enumeration {
+              enum none;
+              enum medium;
+              enum bold;
+              enum demibold;
+            }
+          }
+          leaf slant {
+            type enumeration {
+              enum roman;
+              enum italic;
+              enum oblique;
+              enum reverse_italic;
+              enum reverse_oblique;
+              enum other;
+            }
+          }
+          leaf size {
+            type uint32;
+          }
+        }
+        leaf color {
+          type uint32;
+          description "Color in 0xAARRGGBB format";
+          default 4278190080;
+        }
+        leaf fill {
+          type enumeration {
+            enum solid;
+            enum blend;
+            enum none;
+          }
+          default none;
+        }
+        leaf halign {
+          type enumeration {
+            enum left;
+            enum right;
+            enum center;
+          }
+          default center;
+        }
+        leaf valign {
+          type enumeration {
+            enum top;
+            enum bottom;
+            enum center;
+          }
+          default center;
+        }
+        leaf min {
+          type union {
+            type int32;
+            type decimal64 {
+              fraction-digits 6;
+            }
+          }
+        }
+        leaf max {
+          type union {
+            type int32;
+            type decimal64 {
+              fraction-digits 6;
+            }
+          }
+        }
+        leaf value {
+          type union {
+            type int32;
+            type decimal64 {
+              fraction-digits 6;
+            }
+          }
+        }
+        leaf format {
+          type string;
+          default "~w";
+        }
+      }
+      container hex_epx_out {
+        leaf type {
+          type enumeration {
+            enum button;
+            enum slider;
+            enum value;
+            enum rectangle;
+            enum ellipse;
+            enum line;
+            enum image;
+            enum text;
+          }
+          mandatory true;
+        }
+        leaf id {
+          type string;
+          mandatory true;
+        }
+        leaf x {
+          type int32;
+          default 0;
+        }
+        leaf y {
+          type int32;
+          default 0;
+        }
+        leaf width {
+          type uint32;
+          default 32;
+        }
+        leaf height {
+          type uint32;
+          default 32;
+        }
+        leaf text {
+          type string;
+          default [];
+        }
+        leaf image {
+          type string;
+        }
+        container font {
+          leaf name {
+            type string;
+          }
+          leaf resolution {
+            type int32;
+          }
+          leaf weight {
+            type enumeration {
+              enum none;
+              enum medium;
+              enum bold;
+              enum demibold;
+            }
+          }
+          leaf slant {
+            type enumeration {
+              enum roman;
+              enum italic;
+              enum oblique;
+              enum reverse_italic;
+              enum reverse_oblique;
+              enum other;
+            }
+          }
+          leaf size {
+            type uint32;
+          }
+        }
+        leaf color {
+          type uint32;
+          description "Color in 0xAARRGGBB format";
+          default 4278190080;
+        }
+        leaf fill {
+          type enumeration {
+            enum solid;
+            enum blend;
+            enum none;
+          }
+          default none;
+        }
+        leaf halign {
+          type enumeration {
+            enum left;
+            enum right;
+            enum center;
+          }
+          default center;
+        }
+        leaf valign {
+          type enumeration {
+            enum top;
+            enum bottom;
+            enum center;
+          }
+          default center;
+        }
+        leaf min {
+          type union {
+            type int32;
+            type decimal64 {
+              fraction-digits 6;
+            }
+          }
+        }
+        leaf max {
+          type union {
+            type int32;
+            type decimal64 {
+              fraction-digits 6;
+            }
+          }
+        }
+        leaf value {
+          type union {
+            type int32;
+            type decimal64 {
+              fraction-digits 6;
+            }
+          }
+        }
+        leaf format {
+          type string;
+          default "~w";
+        }
+      }
+    }
+  }
+}

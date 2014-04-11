@@ -1,0 +1,106 @@
+module hex_smtp {
+  namespace "http://rogvall.se/hex/hex_smtp";
+  prefix "hex_smtp";
+  container config {
+    container hex_smtp {
+      container hex_smtp_in;
+      container hex_smtp_out {
+        choice account {
+          case name {
+            leaf name {
+              type string;
+            }
+          }
+          case config {
+            container config {
+              leaf relay {
+                type 'yang:domain-name';
+                mandatory true;
+              }
+              leaf port {
+                type 'yang:port-number';
+              }
+              leaf ssl {
+                type boolean;
+                default false;
+              }
+              leaf username {
+                type string;
+              }
+              leaf password {
+                type string;
+              }
+              leaf tls {
+                type enumeration {
+                  enum if_available;
+                  enum always;
+                  enum never;
+                }
+                default if_available;
+              }
+              leaf auth {
+                type enumeration {
+                  enum if_available;
+                  enum always;
+                  enum never;
+                }
+                default if_available;
+              }
+              leaf retries {
+                type uint32;
+                default 1;
+              }
+              leaf date {
+                type string;
+                default false;
+              }
+              leaf message_id {
+                type string;
+                default false;
+              }
+            }
+          }
+        }
+        leaf from {
+          type 'hex:rfc822';
+          mandatory true;
+        }
+        leaf-list to {
+          type 'hex:rfc822';
+          min-elements 1;
+        }
+        leaf subject {
+          type string;
+          default [];
+        }
+        choice body {
+          case text {
+            leaf text {
+              type string;
+            }
+          }
+          case image {
+            container image {
+              leaf filename {
+                type string;
+                mandatory true;
+              }
+              leaf mime_type {
+                type string;
+                default "image/png";
+              }
+            }
+          }
+        }
+        leaf date {
+          type string;
+          default false;
+        }
+        leaf message_id {
+          type string;
+          default false;
+        }
+      }
+    }
+  }
+}

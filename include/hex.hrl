@@ -93,8 +93,7 @@
 	{
 	  label :: atom() | integer(),  %% rule id
 	  signal :: #hex_pattern{},     %% input match pattern
-	  flags :: [{atom(),term()}],   %% input state flags
-	  output  :: [uint8()]          %% list of output channels
+	  flags :: [{atom(),term()}]    %% input state flags
 	}).
 	  
 -record(hex_event, 
@@ -108,14 +107,14 @@
 -record(hex_output,
 	{
 	  label :: atom() | integer(),
-	  flags = [] :: [atom() | {atom(),term()}],
+	  flags = [] :: [{atom(),term()}],
 	  actions = []
 	}).
 
 -record(hex_transmit,
 	{
 	  label :: atom() | integer(),
-	  app :: atom(),      %% signal transmittion app
-	  flags = [] :: [atom() | {atom(),term()}],
+	  app   :: atom(),      %% signal transmittion app
+	  flags = [] :: [{atom(),term()}],
 	  signal :: #hex_pattern{}     %% signal to match	  
 	}).

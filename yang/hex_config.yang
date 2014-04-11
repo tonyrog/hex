@@ -1,0 +1,406 @@
+module hex_config {
+  namespace "http://rogvall.se/hex";
+  prefix "hex";
+  choice config {
+    case event {
+      container event {
+        leaf label {
+          type string;
+          mandatory true;
+        }
+        container app {
+          leaf name {
+            type string;
+            mandatory true;
+          }
+          anyxml flags {
+            description "Application specific event flags";
+          }
+        }
+        container event {
+          leaf id {
+            type 'hex:pattern';
+          }
+          leaf chan {
+            type 'hex:pattern';
+          }
+          leaf type {
+            type 'hex:pattern';
+          }
+          leaf value {
+            type 'hex:pattern';
+          }
+        }
+      }
+    }
+    case input {
+      container input {
+        leaf label {
+          type string;
+          mandatory true;
+        }
+        container event {
+          leaf id {
+            type 'hex:pattern';
+          }
+          leaf chan {
+            type 'hex:pattern';
+          }
+          leaf type {
+            type 'hex:pattern';
+          }
+          leaf value {
+            type 'hex:pattern';
+          }
+        }
+        container flags {
+          leaf digital {
+            type boolean;
+            description "Allow digital input signals.";
+            default true;
+          }
+          leaf analog {
+            type boolean;
+            description "Allow analog input signals.";
+            default true;
+          }
+          leaf encoder {
+            type boolean;
+            description "Allow encoder input signals.";
+            default true;
+          }
+          leaf rifd {
+            type boolean;
+            description "Allow rfid input signals.";
+            default true;
+          }
+          leaf analog_to_digital {
+            type boolean;
+            description "Convert analog to digital signals.";
+            default false;
+          }
+          leaf digital_to_analog {
+            type boolean;
+            description "Convert digital to analog signals.";
+            default false;
+          }
+          leaf on_only {
+            type boolean;
+            description "Accept digital on signals only.";
+            default false;
+          }
+          leaf off_only {
+            type boolean;
+            description "Accept digital off signals only.";
+            default false;
+          }
+          leaf springback {
+            type boolean;
+            description "Input is from a 'springback' button.";
+            default false;
+          }
+          leaf invert {
+            type boolean;
+            description "Digital input is inverted.";
+            default false;
+          }
+          leaf push_encoder {
+            type boolean;
+            description "Activate push encoder functionallity.";
+            default false;
+          }
+          leaf inc_encoder {
+            type boolean;
+            description "Push encoder that only increaments.";
+            default false;
+          }
+          leaf dec_encoder {
+            type boolean;
+            description "Push encoder that only decrements.";
+            default false;
+          }
+          leaf encoder_ival {
+            type uint32;
+            description "Push encoder update interval.";
+            default 250;
+          }
+          leaf encoder_pause {
+            type uint32;
+            description "Push encoder direction switch timeout.";
+            default 3000;
+          }
+          leaf encoder_step {
+            type uint32;
+            description "Push encoder update step.";
+            default 1;
+          }
+          leaf analog_delta {
+            type uint32;
+            description "Analog delta value.";
+            default 1;
+          }
+          leaf analog_trigger {
+            type bits {
+              bit 'upper-limit-exceeded' {
+                position 0;
+              }
+              bit below_lower_limit {
+                position 1;
+              }
+              bit 'changed-by-more-than-delta' {
+                position 2;
+              }
+              bit 'changed-by-more-than-negative-delta' {
+                position 3;
+              }
+              bit 'changed-by-more-than-positive-delta' {
+                position 4;
+              }
+            }
+          }
+          leaf analog_negative_delta {
+            type uint32;
+            description "Analog negative delta value.";
+            default 1;
+          }
+          leaf analog_positive_delta {
+            type uint32;
+            description "Analog positive delta value.";
+            default 1;
+          }
+          leaf analog_max_frequency {
+            type decimal64 {
+              fraction-digits 6;
+            }
+            description "Analog max output frequency.";
+            default 0;
+          }
+          leaf analog_lower_limit {
+            type int32;
+            description "Analog lower limit.";
+            default 0;
+          }
+          leaf analog_upper_limit {
+            type int32;
+            description "Analog upper limit.";
+            default 65535;
+          }
+          leaf analog_min {
+            type int32;
+            description "Analog min value.";
+            default 0;
+          }
+          leaf analog_max {
+            type int32;
+            description "Analog max value.";
+            default 65535;
+          }
+          leaf analog_offs {
+            type int32;
+            description "Analog offset value.";
+            default 0;
+          }
+          leaf analog_scale {
+            type decimal64 {
+              fraction-digits 6;
+            }
+            description "Analog offset value.";
+            default 1.0;
+          }
+          leaf rfid_match {
+            type uint32;
+            default 0;
+          }
+          leaf rfid_mask {
+            type uint32;
+            default 0;
+          }
+          leaf rfid_match_to_digital {
+            type boolean;
+            default false;
+          }
+          list output {
+            key channel;
+            leaf channel {
+              type uint8 {
+                range 1..254;
+              }
+            }
+            leaf target {
+              type string;
+              default value;
+            }
+          }
+        }
+      }
+    }
+    case output {
+      container output {
+        leaf label {
+          type uint8 {
+            range 1..254;
+          }
+          mandatory true;
+        }
+        container flags {
+          leaf nodeid {
+            type uint32;
+            default 0;
+          }
+          leaf chan {
+            type uint8;
+            default 0;
+          }
+          leaf ramp_min {
+            type uint32;
+            default 20;
+            description "The min step in ms for each output change in ramp -up or -down.";
+          }
+          leaf min_value {
+            type uint32;
+            default 0;
+            description "same as target.value.out_min";
+          }
+          leaf max_value {
+            type uint32;
+            default 65535;
+            description "same as target.value.out_max";
+          }
+          leaf value {
+            type uint32;
+            default 0;
+            description "The input value";
+          }
+          leaf inhibit {
+            type uint32;
+            default 0;
+            description "Inhibit re-activation for ms";
+          }
+          leaf delay {
+            type uint32;
+            default 0;
+            description "Delay in ms before activation of output. If output is deactivated before this timeout then the output is never activated.";
+          }
+          leaf rampup {
+            type uint32;
+            default 0;
+            description "The time in ms for the output signal  to reach it's max_value from its min_value.";
+          }
+          leaf rampdown {
+            type uint32;
+            default 0;
+            description "The time in ms for the output signal  to reach it's min_value from its max_value.";
+          }
+          leaf sustain {
+            type uint32;
+            default 0;
+            description "The time in ms the output should stay at its maximum value before rampdown starts. A value of 0 means forever or until a deactivation signal arrives.";
+          }
+          leaf deact {
+            type uint32;
+            default 0;
+            description "Deactivation delay in ms. If output is reactivated again before this timeout the output is never deactivated.";
+          }
+          leaf wait {
+            type uint32;
+            default 0;
+            description "Delay in ms before next pulse, used when repeat is set to a non zero value.";
+          }
+          leaf repeat {
+            type int32 {
+              range -1..2147483647;
+            }
+            default 0;
+            description "Pulse repeat count. A value of -1 means that the output repeat forever, or until a desctivation signal arrives.";
+          }
+          leaf feedback {
+            type boolean;
+            default false;
+            description "Feedback the output signal as an input signal. Can be useful when implementing time delays etc.";
+          }
+          leaf transmit {
+            type boolean;
+            default false;
+            description "Transmit the signal using the transmit configration. This is used to implement signal distribution. A CAN transmit module allow all nodes in the network to monitor the output actions.";
+          }
+          list target {
+            description "Declare the name of the id in the action spec that will receive the scaled/mapped value. This is mandatory for all values destined for action.";
+            key name;
+            leaf name {
+              type string;
+              mandatory true;
+            }
+            leaf type {
+              type enumeration {
+                enum clamp;
+                enum wrap;
+              }
+              default clamp;
+              description "Input value mapping.";
+            }
+            leaf in_min {
+              type uint32;
+              default 0;
+            }
+            leaf in_max {
+              type uint32;
+              default 65535;
+            }
+            leaf out_min {
+              type uint32;
+              default 0;
+            }
+            leaf out_max {
+              type uint32;
+              default 65535;
+            }
+          }
+        }
+        list actions {
+          key pattern;
+          leaf pattern {
+            type 'hex:pattern';
+          }
+          leaf name {
+            type string;
+            mandatory true;
+          }
+          anyxml flags {
+            description "Application specific action flags";
+          }
+        }
+      }
+    }
+    case transmit {
+      container transmit {
+        leaf label {
+          type string;
+          mandatory true;
+        }
+        container app {
+          leaf name {
+            type string;
+            mandatory true;
+          }
+          anyxml flags {
+            description "Application specific transmit flags";
+          }
+        }
+        container event {
+          leaf id {
+            type 'hex:pattern';
+          }
+          leaf chan {
+            type 'hex:pattern';
+          }
+          leaf type {
+            type 'hex:pattern';
+          }
+          leaf value {
+            type 'hex:pattern';
+          }
+        }
+      }
+    }
+  }
+}

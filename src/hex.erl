@@ -27,9 +27,10 @@
 -export([auto_join/1, join_async/1, join/1]).
 -export([validate_flags/2]).
 -export([text_expand/2]).
+-export([pp_yang/1]).
+-export([save_yang/2]).
 
 -include("../include/hex.hrl").
-
 
 start() ->
     start_all(hex).
@@ -143,16 +144,7 @@ trim_hd(Cs) -> Cs.
 
 %%
 %% Library function for option validation:
-%% Spec = [{Key,optional|mandatory,Type,Default}]
-%% Type =  integer|string(unicode)|iolist|binary|bitstring|boolean|bool|
-%%         atom|timeout|{tuple,[Type]}|{list,Type},{record,atom()}
-%%         unsigned|unsigned1|unsigned8|unsigned16|unsigned32|unsigned64|
-%%         integer|integer8|integer16|integer32|integer64|
-%%         float|float01|number|
-%%         {integer,Min,Max}|{number,Min,Max}|{float,Min,Max}|
-%%         {sys_config,App::atom(),Spec}|
-%%         fun (Value) -> boolean()
-%%
+%% Spec is internal YANG format.
 %% return ok | {error, Reason}
 %% Reason:
 %%   [ {mandatory,Key} |
@@ -172,6 +164,7 @@ validate_flags(Options, Spec) ->
 validate_flags_([Option|Options], Spec, Error) ->
     case validate_flag(Option, Spec) of
 	ok -> validate_flags_(Options, Spec, Error);
+	{ok,Spec1} -> validate_flags_(Options, Spec++Spec1, Error);
 	E -> validate_flags_(Options, Spec, [E|Error])
     end;
 validate_flags_([], _Spec, []) ->
@@ -179,33 +172,22 @@ validate_flags_([], _Spec, []) ->
 validate_flags_([], _Spec, Error) ->
     {error, Error}.
 
-validate_flag({Key,Value}, Spec) ->
-    case lists:keyfind(Key, 1, Spec) of
-	false -> 
-	    {unknown,Key};
-	{_Key,_Status,Type,_} ->
-	    case validate_value(Value, Type) of
-		ok -> 
-		    ok;
-		badarg ->
-		    {badarg,Key};
-		{range,Range} -> 
-		    {range,{Key,Range}};
-		{missing_sys_config,{App,Value}} ->
-		    {missing_sys_config,{Key,{App,Value}}};
-		{error,List}-> %% from recursive (sys config) validation
-		    {badarg, {Key,List}}
-	    end
-    end.
 
-validate_spec_([{Key,mandatory,_,_}|Spec],Options,Error) ->
+validate_spec_([{leaf,Key,As}|Spec],Options,Error) ->
     case lists:keymember(Key,1,Options) of
 	false ->
-	    validate_spec_(Spec, Options, [{mandatory,Key}|Error]);
-	true ->
+	    case lists:keyfind(mandatory,1,As) of
+		false ->
+		    validate_spec_(Spec, Options, Error);
+		{mandatory,false,_} ->
+		    validate_spec_(Spec, Options, Error);
+		{mandatory,true,_} ->
+		    validate_spec_(Spec, Options, [{mandatory,Key}|Error])
+	    end;
+	_ ->
 	    validate_spec_(Spec, Options, Error)
     end;
-validate_spec_([{_,optional,_,_}|Spec],Options, Error) ->
+validate_spec_([_|Spec],Options, Error) -> %% fixme: check container
     validate_spec_(Spec, Options, Error);
 validate_spec_([], _Options, []) ->
     ok;
@@ -213,191 +195,223 @@ validate_spec_([], _Options, Error) ->
     {error,Error}.
 
 
-%% validate a value
-%% return ok | badarg | {range,ValidRange}
-validate_value(Value, boolean) ->
-    if is_boolean(Value) -> ok;
+validate_flag({Key,Value}, Spec) ->
+    case lists:keyfind(Key, 2, Spec) of
+	{leaf, Key, Stmts } ->
+	    validate_leaf(Key, Value, Stmts);
+	{'leaf-list', Key, Stmts } ->
+	    validate_leaf(Key, Value, Stmts);
+	{container, Key, Stmts} ->
+	    validate_flags(Value, Stmts);
+	{list, Key, Stmts} ->
+	    validate_list(Key, Value, Stmts);
+	{choice, Key, Stmts} ->
+	    validate_choice(Key, Value, Stmts);
+	false ->
+	    {unknown,Key}
+    end.
+
+validate_choice(Key, Value, Stmts) ->
+    case Value of
+	false -> {error,{Key,badarg}};
+	{Case,CaseValue} ->
+	    case lists:keyfind(Case,2,Stmts) of
+		{'case',_,CaseStmts} ->
+		    case lists:keyfind(Case, 2, CaseStmts) of
+			false -> {error,{Key,{missing_choice,Case}}};
+			{leaf,Case,Stmts1} ->
+			    validate_leaf(Case, CaseValue, Stmts1);
+			{_,_,Stmts1} ->
+			    validate_flags(CaseValue, Stmts1)
+		    end
+	    end
+    end.
+
+validate_leaf(Key, Value, Stmts) ->
+    case lists:keyfind(type, 1, Stmts) of
+	false ->
+	    {missing_type, Key};
+	{type, Type, Tas} ->
+	    case validate_value(Value, Type, Tas) of
+		ok -> ok;
+		{error,Error} -> {error,{Key,Error}};
+		Error -> {error, {Key,Error}}
+	    end
+    end.
+
+validate_list(_Key, Value, Stmts) ->
+    case lists:keytake(key, 1, Stmts) of
+	false ->
+	    {error, {missing,key}};
+	{value,{key,ListKey,_},Stmts1} ->
+	    case lists:keyfind(ListKey, 2, Stmts1) of
+		{leaf, ListKey, _} ->
+		    validate_flags(Value, Stmts1);
+		_W ->
+		    %% io:format("~p\n", [W]),
+		    {error, {missing,ListKey}}
+	    end
+    end.
+
+    
+    
+    
+
+-define(r(Min,Max), {range,[{(Min),(Max)}],[]}).
+
+validate_value(Value, boolean, Tas) ->
+    if is_boolean(Value) -> restrict_value(Value, boolean, Tas);
        is_atom(Value) -> badarg;
-       true -> {range,[true,false]}
+       true ->
+	    {range,[true,false]}
     end;
-validate_value(Value, bool) ->
-    if is_boolean(Value); ?is_uint1(Value) ->  ok;
-       true -> {range, [true,false,{0,1}]}
+validate_value(Value, uint8, Tas) ->
+    validate_uint(Value, uint8, [?r(0,16#ff)|Tas]);
+validate_value(Value, uint16, Tas) ->
+    validate_uint(Value, uint16, [?r(0,16#ffff)|Tas]);
+validate_value(Value, uint32, Tas) ->
+    validate_uint(Value, uint32, [?r(0,16#ffffffff)|Tas]);
+validate_value(Value, uint64, Tas) ->
+    validate_uint(Value, uint64, [?r(0,16#ffffffffffffffff)|Tas]);
+validate_value(Value, int8, Tas) ->
+    validate_int(Value,int8,[?r(-16#80,16#7f)|Tas]);
+validate_value(Value, int16, Tas) ->
+    validate_int(Value,int16,[?r(-16#8000,16#7fff)|Tas]);
+validate_value(Value, int32, Tas) ->
+    validate_int(Value,int32,[?r(-16#80000000,16#7fffffff)|Tas]);
+validate_value(Value, int64, Tas) ->
+    validate_int(Value,int64,
+		   [?r(-16#8000000000000000,16#7fffffffffffffff)|Tas]);
+validate_value(Value, decimal64, Tas) ->
+    if is_float(Value) ->
+	    restrict_value(Value, decimal64, Tas);
+       %% maybe accept integer encoding here as well?
+       true ->
+	    badarg
     end;
-validate_value(Value, {const,Const}) ->
-    if Value =:= Const -> ok;
-       true -> badarg
+validate_value(Value, enumeration, Tas) ->
+    if is_atom(Value) ->
+	    validate_enum(Value, Tas);
+       true ->
+	    Es = lists:foldr(fun({enum,E,_},Acc) -> [E|Acc];
+				(_,Acc) -> Acc
+			     end, [], Tas),
+	    {enumeration, Es}
     end;
-validate_value(Value, timeout) ->
-    validate_value(Value, {alt,[unsigned32|{const,infinity}]});
-validate_value(Value, unsigned1) ->
-    validate_integer_range(Value, 0, 1);
-validate_value(Value, unsigned8) ->
-    validate_integer_range(Value, 0, 16#ff);
-validate_value(Value, unsigned16) ->
-    validate_integer_range(Value, 0, 16#ffff);
-validate_value(Value, unsigned32) ->
-    validate_integer_range(Value, 0, 16#ffffffff);
-validate_value(Value, unsigned64) ->
-    validate_integer_range(Value, 0, 16#ffffffffffffffff);
-validate_value(Value, unsigned) ->
-    if is_integer(Value) ->
-	    if Value >= 0 -> ok;
-	       true -> {range, [{0,'..'}]}
-	    end;
-       true -> badarg
+validate_value(Value, bits, Tas) ->
+    if is_atom(Value) ->
+	    validate_bit(Value, Tas);
+       true ->
+	    Es = lists:foldr(fun({bit,E,_},Acc) -> [E|Acc];
+				(_,Acc) -> Acc
+			     end, [], Tas),
+	    {bits, Es}
     end;
-validate_value(Value, integer8) ->
-    validate_integer_range(Value, -16#80, 16#7f);
-validate_value(Value, integer16) ->
-    validate_integer_range(Value, -16#8000, 16#7fff);
-validate_value(Value, integer32) ->
-    validate_integer_range(Value,-16#80000000, 16#7fffffff);
-validate_value(Value, integer64) ->
-    validate_integer_range(Value,-16#8000000000000000,16#7fffffffffffffff);
-validate_value(Value, integer) ->
-    if is_integer(Value) -> ok;
-       true -> badarg
-    end;
-validate_value(Value, {integer,Min,Max}) 
-  when is_integer(Min), is_integer(Max), Min =< Max ->
-    validate_integer_range(Value, Min, Max);
-validate_value(Value, number) ->
-    if is_number(Value) -> ok;
-       true -> badarg
-    end;
-validate_value(Value, {number,Min,Max})
-  when is_number(Min), is_number(Max), Min =< Max ->
-    validate_number_range(Value, Min, Max);
-validate_value(Value, float) ->
-    if is_float(Value) -> ok;
-       true -> badarg
-    end;
-validate_value(Value, {float,Min,Max})
-  when is_float(Min), is_float(Max), Min =< Max ->
-    validate_float_range(Value, Min, Max);
-validate_value(Value, float01) ->
-    if is_number(Value), Value >= 0.0, Value=< 1.0 -> ok;
-       is_number(Value) -> {range, [{0.0,1.0}]};
-       true -> badarg
-    end;
-validate_value(Value, atom) ->
-    if is_atom(Value) -> ok;
-       true -> badarg
-    end;
-validate_value(Value, string) ->
-    case is_string(Value) of
-	true  -> ok;
+validate_value(Value, string, Tas) ->
+    case is_atom(Value) orelse is_string(Value) of
+	true ->  restrict_value(Value, string, Tas);
 	false -> badarg
     end;
-validate_value(Value, iolist) ->
+validate_value(Value, binary, Tas) ->
     case is_iolist(Value) of
+	true -> restrict_value(Value, binary, Tas);
+	false -> badarg
+    end;
+validate_value(Value, union, Tas) ->
+    case lists:any(fun({type,Type,Tas1}) ->
+			   case validate_value(Value, Type, Tas1) of
+			       ok -> true;
+			       _ -> false
+			   end;
+		      (_) -> false
+		   end, Tas) of
 	true -> ok;
 	false -> badarg
     end;
-validate_value(Value, binary) ->
-    if is_binary(Value) -> ok;
-       true -> badarg
-    end;
-validate_value(Value, bitstring) ->
-    if is_bitstring(Value) -> ok;
-       true -> badarg
-    end;
-validate_value(Value, {alt,Ts}) when is_list(Ts) ->
-    validate_value_alt(Value, Ts);
-validate_value(Value, {tuple,Ts}) when is_list(Ts) ->
-    N = length(Ts),
-    if is_tuple(Value), tuple_size(Value) =:= N ->
-	    validate_tuple_elems(tuple_to_list(Value), Ts);
-       true ->
-	    badarg
-    end;
-validate_value(Value, {record,Name}) when is_atom(Name) ->
-    if is_tuple(Value), element(1,Value) =:= Name ->
-	    ok;
-       true ->
-	    badarg
-    end;
-validate_value(Value, {list,T}) ->
+validate_value(Value, anyxml, _Tas) ->
     if is_list(Value) ->
-	    validate_list_elems(Value, T);
-       true ->
-	    badarg
+	    ok;
+       true -> badarg
     end;
-validate_value(Value, {sys_config,App,Spec}) 
-  when is_atom(App), is_list(Spec) ->
-    if is_atom(Value) ->
-	    case application:get_env(App,Value) of
-		{ok,ConfValue} ->
-		    validate_flags(ConfValue,Spec);
-		_ ->
-		    {missing_sys_config,{App,Value}}
-	    end;
-       true ->
-	    badarg
-    end;
-validate_value(Value, Func) when is_function(Func) ->
-    try Func(Value) of
+validate_value(_Value, 'hex:rfc822', _Tas) ->  %% fixme!
+    %% validate email address
+    ok;
+validate_value(Value, 'yang:domain-name',_Tas) -> %% fixme!
+    try inet_parse:domain(Value) of
 	true -> ok;
 	false -> badarg
     catch
-	error:_ ->
-	    badarg
-    end.
-
-validate_integer_range(Value, Min, Max) ->
-    if is_integer(Value) -> validate_range(Value, Min, Max);
-       true -> badarg
-    end.
-
-validate_number_range(Value, Min, Max) ->
-    if is_number(Value) -> validate_range(Value, Min, Max);
-       true -> badarg
-    end.
-
-validate_float_range(Value, Min, Max) ->
-    if is_float(Value) -> validate_range(Value, Min, Max);
-       true -> badarg
-    end.
-
-validate_range(Value, Min, Max) when Value >= Min, Value =< Max ->
-    ok;
-validate_range(_Value, Min, Max) ->
-    {range,[{Min,Max}]}.
-
-
-%% check value with alternate type spec
-validate_value_alt(Value, [T|Ts]) ->
-    case validate_value(Value, T) of
-	ok -> ok;
-	_Error ->
-	    validate_value_alt(Value,Ts)
+	error:_ -> badarg
     end;
-validate_value_alt(_Value, []) ->
+validate_value(Value, 'yang:port-number',_Tas) -> %% fixme!
+    if is_integer(Value), Value >= 0, Value =< 65535 -> ok;
+       true -> badarg
+    end.
+
+validate_uint(Value, Type, Tas) ->
+    if is_integer(Value), Value >= 0 -> restrict_value(Value, Type, Tas);
+       true -> badarg
+    end.
+
+validate_int(Value, Type, Tas) ->
+    if is_integer(Value) -> restrict_value(Value, Type, Tas);
+       true -> badarg
+    end.
+
+restrict_value(Value, Type,[{range,Range,_}|Opts]) ->
+    case lists:any(fun({min,max}) -> true;
+		      ({min,Max}) -> Value =< Max;
+		      ({Min,max}) -> Value >= Min;
+		      ({Min,Max}) -> (Value >= Min) andalso (Value =< Max);
+		      (V) -> Value =:= V
+		   end, Range) of
+	true ->
+	    restrict_value(Value, Type,Opts);
+	false ->
+	    {range,Range}
+    end;
+restrict_value(Value, Type, [{length,Range,_}|Opts]) ->
+    Len = if Type =:= string -> length(Value);
+	     Type =:= binary -> erlang:iolist_size(Value)
+	  end,
+    case lists:any(fun({min,max}) -> true;
+		      ({min,Max}) -> Len =< Max;
+		      ({Min,max}) -> Len >= Min;
+		      ({Min,Max}) -> (Len >= Min) andalso (Len =< Max);
+		      (L) -> Len =:= L
+		   end, Range) of
+	true ->
+	    restrict_value(Value, Type, Opts);
+	false ->
+	    {length,Range}
+    end;
+restrict_value(Value, Type, [{pattern,RegExp,_}|Opts]) ->
+    case xsdre:match(Value, RegExp) of
+	true ->
+	    restrict_value(Type, Value, Opts);
+	false ->
+	    {pattern, RegExp}
+    end;
+restrict_value( _Value, _Type, []) ->
+    ok.
+
+validate_enum(Value, [{enum,Name,_As}|List]) ->
+    if Value =:= Name -> ok;
+       true -> validate_enum(Value, List)
+    end;
+validate_enum(Value, [_|List]) ->       
+    validate_enum(Value, List);
+validate_enum(_Value, []) -> 
     badarg.
 
-
-%% validate tuple elements
-validate_tuple_elems([Value|Vs], [T|Ts]) ->
-    case validate_value(Value, T) of
-	ok ->
-	    validate_tuple_elems(Vs,Ts);
-	Error ->
-	    Error
+validate_bit(Value, [{bit,Name,_As}|List]) ->
+    if Value =:= Name -> ok;
+       true -> validate_bit(Value, List)
     end;
-validate_tuple_elems([], []) ->
-    ok.
-
-%% check list/array element types
-validate_list_elems([Value|Vs], T) ->
-    case validate_value(Value, T) of
-	ok -> 
-	    validate_list_elems(Vs, T);
-	Error ->
-	    Error
-    end;
-validate_list_elems([], _) ->
-    ok.
+validate_bit(Value, [_|List]) ->       
+    validate_bit(Value, List);
+validate_bit(_Value, []) -> 
+    badarg.
 
 is_string(Value) ->
     try unicode:characters_to_binary(Value) of
@@ -413,3 +427,74 @@ is_iolist(Value) ->
     catch
 	error:_ -> false
     end.
+
+%% save yang spec to file
+save_yang(File, App) ->
+    file:write_file(File, list_to_binary(pp_yang(App))).
+
+%% pretty format a spec as yang container
+pp_yang(hex_config) ->
+    Conf = hex_config:config_spec(),
+    Yang = {module, hex_config, 
+	    [{namespace, "http://rogvall.se/hex", []},
+	     {prefix, "hex", []},
+	     Conf]},
+    pp_yang(Yang);
+    
+pp_yang(hex_input) ->
+    Conf = hex_input:event_spec(),
+    Yang = {module, hex_input, 
+	    [{namespace, "http://rogvall.se/hex", []},
+	     {prefix, "hex", []},
+	     {container, config, Conf}]},
+    pp_yang(Yang);
+pp_yang(hex_output) ->
+    Conf = hex_output:event_spec(),
+    Yang = {module, hex_output, 
+	    [{namespace, "http://rogvall.se/hex", []},
+	     {prefix, "hex", []},
+	     {container, config, Conf}]},
+    pp_yang(Yang);
+pp_yang(App) when is_atom(App) ->
+    AppName = atom_to_list(App),
+    Conf = yang_spec(App),
+    Yang = {module, App,
+	    [{namespace, "http://rogvall.se/hex/"++AppName, []},
+	     {prefix, AppName, []},
+	     {container, config, [Conf]}]},
+    pp_yang(Yang);
+pp_yang(Yang) when is_tuple(Yang) ->
+    pp_yang("", Yang);
+pp_yang(Yang) when is_list(Yang) ->
+    pp_yang_list("", Yang).
+
+pp_yang(Ident, {Tag,Value,Sub}) ->
+    ValueString = pp_yang_value(Tag, Value, Sub),
+    [Ident,atom_to_list(Tag)," ", ValueString,
+     pp_yang_list(Ident, Sub)].
+
+pp_yang_list(_Ident,[]) -> ";\n";
+pp_yang_list(Ident,Spec) -> 
+    [" {\n", [ pp_yang(["  ",Ident], S) || S <- Spec ], Ident, "}\n"].
+
+yang_spec(App) ->
+    {container,App,
+     [{container,list_to_atom(atom_to_list(App)++"_in"),
+       App:event_spec(in)},
+      {container,list_to_atom(atom_to_list(App)++"_out"),
+       App:event_spec(out)}
+     ]}.
+
+pp_yang_value(range, Value, _Sub) ->
+    pp_yang_range(Value);
+pp_yang_value(length, Value, _Sub) ->
+    pp_yang_range(Value);
+pp_yang_value(_, Value, _Sub) ->
+    io_lib:format("~p", [Value]).
+
+pp_yang_range_elem({Min,Max}) -> io_lib:format("~w..~w", [Min,Max]);
+pp_yang_range_elem(Value) ->io_lib:format("~w", [Value]).
+
+pp_yang_range([E]) -> pp_yang_range_elem(E);
+pp_yang_range([E|Es]) -> [pp_yang_range_elem(E),"|",pp_yang_range(Es)];
+pp_yang_range([]) -> "".

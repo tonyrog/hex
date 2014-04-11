@@ -1,0 +1,66 @@
+module hex_gpio {
+  namespace "http://rogvall.se/hex/hex_gpio";
+  prefix "hex_gpio";
+  container config {
+    container hex_gpio {
+      container hex_gpio_in {
+        leaf pin {
+          type uint8;
+          mandatory true;
+        }
+        leaf pin_reg {
+          type uint8;
+          default 0;
+        }
+        leaf interrupt {
+          type enumeration {
+            enum none;
+            enum rising;
+            enum falling;
+            enum both;
+          }
+          default none;
+        }
+        leaf polarity {
+          type boolean;
+          default false;
+        }
+        leaf direct {
+          type boolean;
+          default false;
+        }
+      }
+      container hex_gpio_out {
+        leaf pin {
+          type uint8;
+          mandatory true;
+        }
+        leaf pin_reg {
+          type uint8;
+          default 0;
+        }
+        leaf value {
+          type uint8 {
+            range 0..1;
+          }
+        }
+        leaf init_value {
+          type enumeration {
+            enum high;
+            enum low;
+            enum out;
+          }
+          default out;
+        }
+        leaf polarity {
+          type boolean;
+          default false;
+        }
+        leaf direct {
+          type boolean;
+          default false;
+        }
+      }
+    }
+  }
+}

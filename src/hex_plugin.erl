@@ -29,11 +29,24 @@
 -spec behaviour_info(Arg::callbacks) -> 
 			    list({FunctionName::atom(), Arity::integer()}).
 
+%% validate_event is optional if event_spec is specified!
+%% is this possible to spec in behaviour_info? (without a warning)
+
 behaviour_info(callbacks) ->
-    [{validate_event,2}, {init_event, 2},
-     {add_event, 3}, {del_event, 1}, {output, 2}];
+    [{validate_event,2},
+     {event_spec,1},
+     {init_event, 2},
+     {add_event, 3}, 
+     {mod_event, 2},
+     {del_event, 1}, 
+     {output, 2}];
 behaviour_info(_) ->
     undefined.
+
+%%
+%% event_spec(in | out) -> 
+%%   [{atom(),mandatory|optional,type(),default()}]
+%%
 
 %%
 %% validate_event(in | out, Flags::[{atom(),term()}]) -> ok | {error,_}
@@ -46,6 +59,11 @@ behaviour_info(_) ->
 %%
 %%  add_event(Flags::[{atom(),term()}, Signal::signal(), Cb:function()) ->    
 %%     {ok, Ref:reference()} | {error, Reason}
+%%
+
+%%
+%%  mod_event(Ref::reference(), Flags::[{atom(),term()}]) ->
+%%     ok | {error, Reason}
 %%
 
 %%

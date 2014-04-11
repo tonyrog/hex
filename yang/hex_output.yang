@@ -1,0 +1,101 @@
+module hex_output {
+  namespace "http://rogvall.se/hex";
+  prefix "hex";
+  container config {
+    leaf nodeid {
+      type uint32;
+      default 0;
+    }
+    leaf chan {
+      type uint8;
+      default 0;
+    }
+    leaf ramp_min {
+      type uint32;
+      default 20;
+    }
+    leaf min_value {
+      type uint32;
+      description "same as target.value.out_min";
+      default 0;
+    }
+    leaf max_value {
+      type uint32;
+      description "same as target.value.out_max";
+      default 65535;
+    }
+    leaf value {
+      type uint32;
+      default 0;
+    }
+    leaf inhibit {
+      type uint32;
+      description "inhibit re-activation for ms";
+      default 0;
+    }
+    leaf delay {
+      type uint32;
+      default 0;
+    }
+    leaf rampup {
+      type uint32;
+      default 0;
+    }
+    leaf rampdown {
+      type uint32;
+      default 0;
+    }
+    leaf sustain {
+      type uint32;
+      default 0;
+    }
+    leaf deact {
+      type uint32;
+      default 0;
+    }
+    leaf wait {
+      type uint32;
+      default 0;
+    }
+    leaf repeat {
+      type int32 {
+        range -1..2147483647;
+      }
+      default 0;
+    }
+    leaf feedback {
+      type boolean;
+      default false;
+    }
+    list target {
+      key name;
+      leaf name {
+        type string;
+        mandatory true;
+      }
+      leaf type {
+        type enumeration {
+          enum clamp;
+          enum wrap;
+        }
+        default clamp;
+      }
+      leaf in_min {
+        type uint32;
+        default 0;
+      }
+      leaf in_max {
+        type uint32;
+        default 65535;
+      }
+      leaf out_min {
+        type uint32;
+        default 0;
+      }
+      leaf out_max {
+        type uint32;
+        default 65535;
+      }
+    }
+  }
+}

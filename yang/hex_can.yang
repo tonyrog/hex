@@ -1,0 +1,54 @@
+module hex_can {
+  namespace "http://rogvall.se/hex/hex_can";
+  prefix "hex_can";
+  container config {
+    container hex_can {
+      container hex_can_in {
+        leaf id {
+          type uint32;
+          default 0;
+        }
+        leaf mask {
+          type uint32;
+          default 0;
+        }
+        leaf invert {
+          type boolean;
+          default false;
+        }
+        leaf intf {
+          type uint32;
+          default 0;
+        }
+      }
+      container hex_can_out {
+        leaf id {
+          type uint32;
+          default 0;
+        }
+        leaf len {
+          type int8 {
+            range -1..8;
+          }
+          default -1;
+        }
+        leaf ext {
+          type boolean;
+          default false;
+        }
+        leaf rtr {
+          type boolean;
+          default false;
+        }
+        leaf data {
+          type binary;
+          default <<>>;
+        }
+        leaf intf {
+          type uint32;
+          default 0;
+        }
+      }
+    }
+  }
+}

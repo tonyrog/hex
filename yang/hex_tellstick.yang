@@ -1,0 +1,118 @@
+module hex_tellstick {
+  namespace "http://rogvall.se/hex/hex_tellstick";
+  prefix "hex_tellstick";
+  container config {
+    container hex_tellstick {
+      container hex_tellstick_in;
+      container hex_tellstick_out {
+        choice protocol {
+          case nexa {
+            container nexa {
+              leaf unit {
+                type uint8 {
+                  range 65..80;
+                }
+                default 65;
+              }
+              leaf channel {
+                type uint8 {
+                  range 1..16;
+                }
+                default 1;
+              }
+              leaf dimmer {
+                type boolean;
+                default false;
+              }
+            }
+          }
+          case nexax {
+            container nexax {
+              leaf unit {
+                type uint32 {
+                  range 0..1073741823;
+                }
+                default 0;
+              }
+              leaf channel {
+                type uint8 {
+                  range 1..16;
+                }
+                default 1;
+              }
+            }
+          }
+          case waveman {
+            container waveman {
+              leaf unit {
+                type uint8 {
+                  range 65..80;
+                }
+                default 65;
+              }
+              leaf channel {
+                type uint8 {
+                  range 1..16;
+                }
+                default 1;
+              }
+            }
+          }
+          case sartano {
+            container sartano {
+              leaf channel {
+                type uint16 {
+                  range 1..1023;
+                }
+                default 1;
+              }
+            }
+          }
+          case ikea {
+            container ikea {
+              leaf unit {
+                type uint8 {
+                  range 65..80;
+                }
+                default 65;
+              }
+              leaf channel {
+                type uint8 {
+                  range 1..16;
+                }
+                default 1;
+              }
+              leaf dimmer {
+                type boolean;
+                default false;
+              }
+              leaf style {
+                type enumeration {
+                  enum smooth;
+                  enum instant;
+                }
+                default smooth;
+              }
+            }
+          }
+          case risingsun {
+            container risingsun {
+              leaf unit {
+                type uint8 {
+                  range 1..4;
+                }
+                default 1;
+              }
+              leaf channel {
+                type uint8 {
+                  range 1..4;
+                }
+                default 1;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -289,9 +289,9 @@ start_outputs([#hex_output { label=L, flags=Flags, actions=Actions} | Out],
 start_outputs([], State) ->
     State.
 
-start_inputs([#hex_input { label=L, flags = Flags, output=Output } | In],
+start_inputs([#hex_input { label=L, flags = Flags } | In],
 	     State) ->
-    {ok,Pid} = hex_input:start_link([{output,Output}|Flags]),
+    {ok,Pid} = hex_input:start_link(Flags),
     ets:insert(State#state.tab, {{input,L}, Pid}),
     InList = [{L,Pid} | State#state.in_list],
     start_inputs(In, State#state { in_list = InList });

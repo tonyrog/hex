@@ -29,6 +29,8 @@
 %% API
 -export([start_link/1]).
 -export([validate_flags/1]).
+-export([event_spec/0]).
+
 
 %% gen_fsm callbacks
 -export([init/1, s_neutral/2, s_push/2, 
@@ -84,7 +86,7 @@
 	  rfid_match = 0 :: uint32(),
 	  rfid_mask  = 0 :: uint32(),
 	  rfid_match_to_digital :: boolean(),
-	  outputs = [] :: [uint8()|{atom(),uint8()}]
+	  outputs = [] :: [{atom(),uint8()}]
 	}).
 
 -record(s,
@@ -107,10 +109,166 @@
 
 %% verify input_flags
 validate_flags(Flags) ->
-    case set_options(Flags, #opt {}) of
-	{ok,_} -> ok;
-	Error -> Error
-    end.
+    hex:validate_flags(Flags, event_spec()).
+%%    case set_options(Flags, #opt {}) of
+%%	{ok,_} -> ok;
+%%	Error -> Error
+%%    end.
+
+event_spec() ->
+    [
+     {leaf, digital, [{type,boolean,[]},
+		      {description, "Allow digital input signals.",[]},
+		      {default, true, []}]},
+     {leaf, analog, [{type,boolean,[]},
+		     {description, "Allow analog input signals.",[]},
+		     {default, true, []}]},
+     {leaf, encoder, [{type,boolean,[]},
+		     {description, "Allow encoder input signals.",[]},
+		      {default, true, []}]},
+     {leaf, rifd, [{type,boolean,[]},
+		   {description, "Allow rfid input signals.",[]},
+		   {default, true, []}]},
+
+     {leaf, analog_to_digital, 
+      [{type,boolean,[]},
+       {description, "Convert analog to digital signals.",[]},
+       {default, false, []}]},
+
+     {leaf, digital_to_analog, 
+      [{type,boolean,[]},
+       {description, "Convert digital to analog signals.",[]},
+       {default, false, []}]},
+
+     {leaf, on_only, 
+      [{type,boolean,[]},
+       {description, "Accept digital on signals only.",[]},
+       {default, false, []}]},
+
+     {leaf, off_only, 
+      [{type,boolean,[]},
+       {description, "Accept digital off signals only.",[]},
+       {default, false, []}]},
+
+     {leaf, springback,
+      [{type,boolean,[]},
+       {description, "Input is from a 'springback' button.",[]},
+       {default, false, []}]},
+
+     {leaf, invert,
+      [{type,boolean,[]},
+       {description, "Digital input is inverted.",[]},
+       {default, false, []}]},
+
+     {leaf, push_encoder,
+      [{type,boolean,[]},
+       {description, "Activate push encoder functionallity.",[]},
+       {default, false, []}]},
+
+     {leaf, inc_encoder,
+      [{type,boolean,[]},
+       {description, "Push encoder that only increaments.",[]},
+       {default, false, []}]},
+
+     {leaf, dec_encoder,
+      [{type,boolean,[]},
+       {description, "Push encoder that only decrements.",[]},
+       {default, false, []}]},
+
+     {leaf, encoder_ival, 
+      [{type, uint32, []},
+       {description, "Push encoder update interval.", []},
+       {default, 250, []}]},
+
+     {leaf, encoder_pause, 
+      [{type, uint32, []},
+       {description, "Push encoder direction switch timeout.", []},
+       {default, 3000, []}]},
+
+     {leaf, encoder_step, 
+      [{type, uint32, []},
+       {description, "Push encoder update step.", []},
+       {default, 1, []}]},
+
+     {leaf, analog_delta, 
+      [{type, uint32, []},
+       {description, "Analog delta value.", []},
+       {default, 1, []}]},
+
+     {leaf, analog_trigger,
+      [{type, bits,
+	[{bit, 'upper-limit-exceeded', [{position,0,[]}]},
+	 {bit, 'below_lower_limit', [{position,1,[]}]},
+	 {bit, 'changed-by-more-than-delta',[{position,2,[]}]},
+	 {bit, 'changed-by-more-than-negative-delta',[{position,3,[]}]},
+	 {bit, 'changed-by-more-than-positive-delta',[{position,4,[]}]}
+	]}]},
+
+     {leaf, analog_negative_delta, 
+      [{type, uint32, []},
+       {description, "Analog negative delta value.", []},
+       {default, 1, []}]},
+
+     {leaf, analog_positive_delta, 
+      [{type, uint32, []},
+       {description, "Analog positive delta value.", []},
+       {default, 1, []}]},
+
+     {leaf, analog_max_frequency, 
+      [{type, decimal64, [{'fraction-digits', 6, []}]},
+       {description, "Analog max output frequency.", []},
+       {default, 0, []}]},
+
+     {leaf, analog_lower_limit,
+      [{type, int32, []},
+       {description, "Analog lower limit.", []},
+       {default, 0, []}]},
+
+     {leaf, analog_upper_limit,
+      [{type, int32, []},
+       {description, "Analog upper limit.", []},
+       {default, 16#ffff, []}]},
+
+     {leaf, analog_min,
+      [{type, int32, []},
+       {description, "Analog min value.", []},
+       {default, 0, []}]},
+
+     {leaf, analog_max,
+      [{type, int32, []},
+       {description, "Analog max value.", []},
+       {default, 16#ffff, []}]},
+
+     {leaf, analog_offs,
+      [{type, int32, []},
+       {description, "Analog offset value.", []},
+       {default, 0, []}]},
+
+     {leaf, analog_scale,
+      [{type, decimal64, [{'fraction-digits',6,[]}]},
+       {description, "Analog offset value.", []},
+       {default, 1.0, []}]},
+
+     {leaf, rfid_match, 
+      [{type, uint32, []},
+       {default, 0, []}]},
+
+     {leaf, rfid_mask, 
+      [{type, uint32, []},
+       {default, 0, []}]},
+
+     {leaf, rfid_match_to_digital,
+      [{type, boolean, []},
+       {default, false, []}]},
+
+     {list, output,
+      [{key,  channel, []},
+       {leaf, channel, [{type, uint8, [{range,[{1,254}],[]}]}]},
+       {leaf, target, [{type, string, []},
+		       {default, value, []}]}
+      ]}
+    ].
+
 	     
 %%--------------------------------------------------------------------
 %% @doc
@@ -437,14 +595,9 @@ output(Type,Value,Src,State,S) ->
 
 send_output(Type,Value,Src,S) ->
     Output = { Type, Value, Src },
-    lists:foreach(fun({Name,I}) when is_atom(Name) -> 
-			  hex_server:output(I,Name,Output);
-		     (I) when Type == digital ->
-			  hex_server:output(I, Output);
-		     (I) ->
-			  hex_server:output(I,value,Output)
-		  end,
-		  (S#s.config)#opt.outputs).
+    lists:foreach(fun({Target,Chan}) ->
+			  hex_server:output(Chan,Target,Output)
+		  end, (S#s.config)#opt.outputs).
 
 set_options([{Option,Value} | Options], Opt) ->
     try set_option(Option, Value, Opt) of
@@ -452,13 +605,6 @@ set_options([{Option,Value} | Options], Opt) ->
     catch
 	error:_ ->
 	    {error, {badarg, {Option, Value}}}
-    end;
-set_options([Option | Options], Opt) ->
-    try set_option(Option, true, Opt) of
-	Opt1 -> set_options(Options, Opt1)
-    catch
-	error:_ ->
-	    {error, {badarg,Option}}
     end;
 set_options([], Opt) ->
     {ok, Opt}.
@@ -508,13 +654,12 @@ set_option(K, V, Opt) ->
 	    Opt#opt { rfid_match_to_digital = V };
 	%% output list
 	output when is_list(V) ->
-	    true = lists:all(
-		     fun({Name,I}) when is_atom(Name) ->
-			     is_integer(I) andalso (I >= 1) andalso (I =< 254);
-			(I) ->
-			     is_integer(I) andalso (I >= 1) andalso (I =< 254)
-		     end, V),
-	    Opt#opt { outputs = V }
+	    Channel = proplists:get_value(channel, V),
+	    Target  = proplists:get_value(target, V, value),
+	    if is_integer(Channel), Channel >= 1, Channel =< 254,
+	       is_atom(Target) ->
+		    Opt#opt { outputs = [{Target,Channel}|Opt#opt.outputs]}
+	    end
     end.
 
 make_trigger([H|T]) ->

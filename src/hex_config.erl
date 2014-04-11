@@ -54,8 +54,8 @@ scan_([R | Rs], E, I, O, T, Err) ->
 	{event,Label,{App,Flags},Event} when is_atom(App) ->
 	    {E1,Err1} = add_event(E,Label,App,Flags,Event,Err),
 	    scan_(Rs, E1, I, O, T, Err1);
-	{input,Label,Event,Flags,Output} ->
-	    {I1,Err1} = add_input(I,Label,Event,Flags,Output,Err),
+	{input,Label,Event,Flags} ->
+	    {I1,Err1} = add_input(I,Label,Event,Flags,Err),
 	    scan_(Rs, E, I1, O, T, Err1);
 	{output,Label,Flags,Actions} ->
 	    {O1,Err1} = add_output(O,Label,Flags,Actions,Err),
@@ -103,7 +103,7 @@ add_event(E, Label, App, Flags, Sig, Err) ->
     end.
 
 
-add_input(I, Label, Sig, Flags, Output, Err) ->
+add_input(I, Label, Sig, Flags, Err) ->
     case lists:keyfind(Label, #hex_input.label, I) of
 	false ->
 	    Err1 = 
@@ -111,22 +111,15 @@ add_input(I, Label, Sig, Flags, Output, Err) ->
 		    ok -> Err;
 		    Error1 -> [{input,Label,Error1}|Err]
 		end,
-	    Err2 = 
-		case is_output(Output) of
-		    true -> Err1;
-		    false ->
-			[{input,Label,{error,{bad_output,Output}}}|Err1]
-		end,
 	    case hex_pattern(Sig) of
 		{ok,Pattern} ->
 		    Input = 
 			#hex_input { label = Label,
 				     signal = Pattern,
-				     flags = Flags,
-				     output = Output },
-		    { [Input|I], Err2 };
+				     flags = Flags },
+		    { [Input|I], Err1 };
 		Error ->
-		    {I, [{input,Label,Error}|Err2]}
+		    {I, [{input,Label,Error}|Err1]}
 	    end;
 	_ ->
 	    {I, [{input,Label,{error,ealready}} | Err]}
@@ -242,9 +235,28 @@ func(F) when ?is_uint4(F) -> F.
 validate_event(App, Dir, Flags) when is_atom(App) ->
     case application:load(App) of
 	ok ->
-	    App:validate_event(Dir, Flags);
+	    validate_app_flags(App, Dir, Flags);
 	{error,{already_loaded,App}} ->
-	    App:validate_event(Dir, Flags);
+	    validate_app_flags(App, Dir, Flags);
+	Error ->
+	    Error
+    end.
+
+validate_app_flags(App, Dir, Flags) ->
+    case code:ensure_loaded(App) of
+	{module,App} ->
+	    case erlang:function_exported(App, validate_event, 2) of
+		true ->
+		    App:validate_event(Dir, Flags);
+		false ->
+		    case erlang:function_exported(App, event_spec, 1) of
+			true ->
+			    Spec = App:event_spec(Dir),
+			    hex:validate_flags(Flags, Spec);
+			false ->
+			    {error, missing_event_spec}
+		    end
+	    end;
 	Error ->
 	    Error
     end.
@@ -259,3 +271,63 @@ validate_actions([{_Pattern,{App,Flags}} | Actions]) ->
     end;
 validate_actions([]) ->
     ok.
+
+config_spec() ->
+    {choice, config,
+     [{'case', event,    [{container, event, event_spec()}]},
+      {'case', input,    [{container, input, input_spec()}]},
+      {'case', output,   [{container, output, output_spec()}]},
+      {'case', transmit, [{container, transmit, transmit_spec()}]}
+     ]}.
+
+event_spec() ->
+    [{leaf, label, [{type,string,[]},{mandatory, true, []} ]},
+     {container, app,
+      [{leaf,   name, [{type,string,[]},{mandatory,true,[]}]},
+       {anyxml, flags,
+	[{description,"Application specific event flags",[]}]}
+      ]},
+     signal_spec()
+    ].
+
+input_spec() ->
+    [{leaf, label, [{type,string,[]},{mandatory,true,[]}]},
+     signal_spec(),
+     {container, flags, hex_input:event_spec()}
+    ].
+
+output_spec() ->
+    [{leaf, label, [{type,uint8,[{range,[{1,254}],[]}]},
+		    {mandatory, true, []}]},
+     {container, flags, hex_output:event_spec() },
+     action_spec()
+    ].
+
+transmit_spec() ->
+    [{leaf, label, [{type,string,[]},
+		    {mandatory, true, []}
+		   ]},
+     {container, app,
+      [{leaf,   name, [{type,string,[]},
+		       {mandatory, true, []}]},
+       {anyxml, flags,
+	[{description,"Application specific transmit flags",[]}]}
+      ]},
+     signal_spec()
+    ].
+
+action_spec() ->
+    {list, actions,
+     [{key, pattern, []},
+      {leaf, pattern, [{type, 'hex:pattern', []}]},
+      {leaf, name, [{type,string,[]},{mandatory, true, []}]},
+      {anyxml, flags, [{description,"Application specific action flags",[]}]}
+     ]}.
+
+signal_spec() ->
+    {container, event, 
+     [{leaf, id,    [{type, 'hex:pattern', []}]},
+      {leaf, chan,  [{type, 'hex:pattern', []}]},
+      {leaf, type,  [{type, 'hex:pattern', []}]},
+      {leaf, value, [{type, 'hex:pattern', []}]}
+     ]}.
