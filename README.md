@@ -5,7 +5,7 @@ HEX is an event engine that integrates micro signals and
 rules into a nice soup of reactions.
 
 The goal is to be able to prototype nearly any kind of
-hardware/software project in a limited amout of time.
+hardware/software project in a limited amount of time.
 
 Plenty of plugins exist to integrate with hardware.
 
