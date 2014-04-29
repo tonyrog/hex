@@ -160,7 +160,7 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 handle_cast({event,Signal=#hex_signal{}}, State) ->
     lager:debug("input event: ~p\n", [Signal]),
-    run_event(Signal, State#state.input_rules),
+    run_event(Signal, State#state.input_rules, State),
     {noreply, State};
 
 handle_cast({transmit,Signal=#hex_signal{}}, State) ->
@@ -351,14 +351,21 @@ init_plugin(App, Dir, Flags) ->
     end.
 
 
-run_event(Signal, Rules) when is_record(Signal, hex_signal) ->
-    run_event_(Signal, Rules).
+run_event(Signal, Rules, State) when is_record(Signal, hex_signal) ->
+    run_event_(Signal, Rules, State),
+    case Signal#hex_signal.type of
+	?HEX_POWER_ON  -> run_power_on(Signal, Rules, State);
+	%% ?HEX_POWER_OFF -> run_power_off(Signal, Rules, State);
+	%% ?HEX_WAKEUP    -> run_wakeup(Signal, Rules, State);
+	%% ?HEX_ALARM     -> run_alarm(Signal, Rules, State);
+	_ -> ok
+    end.
 
-run_event_(Sig, [Rule|Rules]) ->
-    case match_pattern(Sig, Rule#hex_input.signal) of
+run_event_(Signal, [Rule|Rules], State) ->
+    case match_pattern(Signal, Rule#hex_input.signal) of
 	{true,Value} ->
-	    Src = Sig#hex_signal.source,
-	    V = case Sig#hex_signal.type of
+	    Src = Signal#hex_signal.source,
+	    V = case Signal#hex_signal.type of
 		    ?HEX_DIGITAL -> {digital,Value,Src};
 		    ?HEX_ANALOG ->  {analog,Value,Src};
 		    ?HEX_ENCODER -> {encoder,Value,Src};
@@ -366,12 +373,55 @@ run_event_(Sig, [Rule|Rules]) ->
 		    Type -> {Type,Value,Src}
 		end,
 	    input(Rule#hex_input.label, V),
-	    run_event_(Sig, Rules);
+	    run_event_(Signal, Rules, State);
 	false ->
-	    run_event_(Sig, Rules)
+	    run_event_(Signal, Rules, State)
     end;
-run_event_(_Sig, []) ->
+run_event_(_Signal, [], _State) ->
     ok.
+
+run_power_on(Signal, [Rule|Rules], State) ->
+    RulePattern = Rule#hex_input.signal,
+    if is_integer(Signal#hex_signal.id),
+       Signal#hex_signal.id =:= RulePattern#hex_pattern.id,
+       is_integer(RulePattern#hex_pattern.chan) ->
+	    add_outputs(Rule#hex_input.flags,
+			RulePattern#hex_pattern.id,
+			RulePattern#hex_pattern.chan,
+			State),
+	    run_power_on(Signal, Rules, State);
+       true ->
+	    run_power_on(Signal, Rules, State)
+    end;
+run_power_on(_Signal, [], _State) ->
+    ok.
+
+add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
+    case proplists:get_value(channel,Output,0) of
+	Chan when is_integer(Chan), Chan > 0, Chan =< 254 -> 
+	    Value = (Rid bsl 8) bor Rchan,
+	    Add = #hex_signal { id=make_self(State#state.nodeid),
+				chan=Chan,
+				type=?HEX_OUTPUT_ADD,
+				value=Value,
+				source={output,Chan}},
+	    run_transmit(Add, State#state.transmit_rules),
+	    add_outputs(Flags, Rid, Rchan, State);
+	_ ->
+	    add_outputs(Flags, Rid, Rchan, State)
+    end;
+add_outputs([_|Flags], Rid, Rchan, State) ->
+    add_outputs(Flags, Rid, Rchan, State);    
+add_outputs([], _Rid, _Rchan, _State) ->
+    ok.
+
+make_self(NodeID) ->
+    if NodeID band 16#02000000 =/= 0 ->
+	    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff);
+       true ->
+	    (2#0011 bsl 9) bor (NodeID band 16#7f)
+    end.
+    
 
 %% handle "distribution" messages when match
 run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
@@ -384,7 +434,7 @@ run_transmit_(Signal, [Rule|Rules]) ->
 	    App:transmit(Signal, Rule#hex_transmit.flags),
 	    run_transmit_(Signal, Rules);
 	false ->
-	    run_event_(Signal, Rules)
+	    run_transmit_(Signal, Rules)
     end;
 run_transmit_(_Signal, []) ->
     ok.
