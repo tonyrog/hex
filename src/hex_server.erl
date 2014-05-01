@@ -381,6 +381,7 @@ run_event_(_Signal, [], _State) ->
     ok.
 
 run_power_on(Signal, [Rule|Rules], State) ->
+    lager:debug("power on signal ~p", [Signal]),
     RulePattern = Rule#hex_input.signal,
     if is_integer(Signal#hex_signal.id),
        Signal#hex_signal.id =:= RulePattern#hex_pattern.id,
@@ -399,6 +400,8 @@ run_power_on(_Signal, [], _State) ->
 add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
     case proplists:get_value(channel,Output,0) of
 	Chan when is_integer(Chan), Chan > 0, Chan =< 254 -> 
+	    lager:debug("add output id=~w, chan=~w id=~w, rchan=~w",
+		   [State#state.nodeid, Chan, Rid, Rchan]),
 	    Value = (Rid bsl 8) bor Rchan,
 	    Add = #hex_signal { id=make_self(State#state.nodeid),
 				chan=Chan,
