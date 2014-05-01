@@ -400,7 +400,7 @@ run_power_on(_Signal, [], _State) ->
 add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
     case proplists:get_value(channel,Output,0) of
 	Chan when is_integer(Chan), Chan > 0, Chan =< 254 -> 
-	    lager:debug("add output id=~w, chan=~w id=~w, rchan=~w",
+	    lager:debug("add output id=~.16B, chan=~w id=~.16B, rchan=~w",
 		   [State#state.nodeid, Chan, Rid, Rchan]),
 	    Value = (Rid bsl 8) bor Rchan,
 	    Add = #hex_signal { id=make_self(State#state.nodeid),
