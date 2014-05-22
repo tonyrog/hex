@@ -595,8 +595,8 @@ output(Type,Value,Src,State,S) ->
 
 send_output(Type,Value,Src,S) ->
     Output = { Type, Value, Src },
-    lists:foreach(fun({Target,Chan}) ->
-			  hex_server:output(Chan,Target,Output)
+    lists:foreach(fun({Target,Channel}) ->
+			  hex_server:output(Channel,Target,Output)
 		  end, (S#s.config)#opt.outputs).
 
 set_options([{Option,Value} | Options], Opt) ->

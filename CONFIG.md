@@ -24,22 +24,24 @@ Specification of HomeExchange (Hex) configuration file
       {input,
        Label::id(),
 	   Pattern::event_pattern(),
-       [input_flag()],[out_id()|{out_channel(),out_id()}]
+       [input_flag()]
       }
 
-	out_channel() :: value|inhibit|delay|rampup|sustain|rampdown|
-                     deact|wait|repeat|atom()
+    user_target() :: atom()
+	builtin_target() :: value|inhibit|delay|rampup|sustain|rampdown|
+                       deact|wait|repeat
+	target() :: builtin_target() | user_target()
 
     input_flag() ::
-		springback   |
-		push_encoder |
-	    analog_to_digital |
-	    digital_to_analog |
-		invert |
-	    on_only  |
-	    off_only |
-		inc_encoder |
-		dec_encoder |
+		{springback,boolean()}   |
+		{push_encoder,boolean()} |
+	    {analog_to_digital,boolean()} |
+	    {digital_to_analog,boolean()} |
+		{invert,boolean()} |
+	    {on_only,boolean()}  |
+	    {off_only,boolean()} |
+		{inc_encoder,boolean()} |
+		{dec_encoder,boolean()} |
 		{encoder_ival,  uint32()} |
 	    {encoder_pause, uint32()} |
 	    {encoder_step,  int32()} |
@@ -51,12 +53,13 @@ Specification of HomeExchange (Hex) configuration file
 		     'changed-by-more-than-positive-delta']},
 	    {analog_delta,  uint32()} |
 		{analog_negative_delta, uint32()} |
-		{analog_positive_delta, uint32()} |		
+		{analog_positive_delta, uint32()} |
 		{analog_max_frequency, decimal64()}
 		{analog_min,  int32()} |
 		{analog_max,  int32()} |
-		{analog_offs, int32() } |
+		{analog_offs, int32()} |
 		{analog_scale, int32()}
+		{target,[{channel,out_id()},{target,target()}]}
 
 #Output processing
 
@@ -68,35 +71,66 @@ Specification of HomeExchange (Hex) configuration file
       }
 
 	output_flag() ::
-		value       :: uint32()
-	    inhbit      :: timeout()
-		delay       :: timeout()
-	    rampup      :: timeout()
-		sustain     :: timeout()
-		rampdown    :: timeout()
-		deact       :: timeout()
-		wait        :: timeout()
-		repeat      :: integer() -1 = pulse forever
-		feedback    :: boolean()
-		min_value   :: uint32()
-		max_value   :: uint32()
-        ramp_min    :: uint32() minimum time quant (hard is 20 ms)
-        target	    :: target_spec() 
+		{nodeid, uint32()} |
+		{chan, uint8()} |
+        {ramp_min, uint32()} | %%  minimum time quant (hard is 20 ms)
+		{min_value, uint32()} | %% = {target,[{name,value},{out_min,Value}]}
+		{max_value, uint32()} | %% = {target,[{name,value},{out_max,Value}]}
+		{value, uint32()} |
+	    {inhbit, timeout()} |
+		{delay, timeout()} |
+	    {rampup, timeout()} |
+		{sustain, timeout()} |
+		{rampdown, timeout()} |
+		{deact, timeout()} |
+		{wait, timeout()} |
+		{repeat, integer()} | %% -1 = pulse forever
+		{feedback, boolean()} |
+		{transmit, boolean()} |
+		{active, active_expr()} |  %% active expressio (default = "value")
+        {target, target_spec()}
 
     target_spec() :: [target_flag()]
 
 	target_flag() ::
-		name      :: atom(),
-		type      :: clamp | wrap
-		in_min    :: uint32()
-		in_max    :: uint32()
-		out_min   :: uint32()
-		out_max   :: uint32()
+		{name, atom()} |
+		{type, clamp | wrap} |
+		{in_min, uint32()} |
+		{in_max, uint32()} |
+		{out_min, uint32()} |
+		{out_max, uint32()}.
 
-    action() :: plugin_action() | [{pattern(),plugin_action()}].
+    action() :: plugin_action() | [{cond(),plugin_action()}].
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.
     plugin_output_flag() :: atom() | {atom(),term()}.
 
+	cond() :: [] | lexpr().  %% [] == true
+
+    active_expr() :: string() or expr()
+	lexpr() ::
+		aexpr() |
+		rexpr() |
+	    lexpr() and lexpr() |
+	    lexpr() or lexpr() |
+	    lexpr() xor lexpr() |
+		not lexpr().
+	rexpr() ::
+		aexpr() < aexpr() |
+		aexpr() =< aexpr() |
+		aexpr() > aexpr() |
+		aexpr() >= aexpr() |
+		aexpr() == aexpr() |
+		aexpr() /= aexpr().
+    aexpr() ::
+		integer() |
+		true | %% = 1
+		false |  %% = 0
+	    aexpr() + aexpr() |
+	    aexpr() - aexpr() |
+	    aexpr() * aexpr() |
+	    aexpr() div aexpr() |
+	    aexpr() rem aexpr() |
+		- aexpr().
 
 # Transmit processing
 
@@ -130,8 +164,16 @@ Specification of HomeExchange (Hex) configuration file
        { ID::pattern(), Chan::pattern(), Type::pattern(), Value::pattern() }
 
 
-	can_id() :: uint11() | {cobid,uint11()} | {cobid,func(),ID::uint7()} |
-		{xcobid,func(),ID::uint25()} | {xcobid,uint29()}.
+	can_id() ::
+       uint11() |
+       {cobid,uint11()} |
+       {cobid,self} |
+       {cobid,func(),ID::uint7()} |
+       {cobid,func(),self} |
+       {xcobid,func(),ID::uint25()} |
+       {xcobid,func(),self} |
+       {xcobid,uint29()} |
+       {xcobid,self}
 	         
 	func() :: nmt | sync | time_stamp |
     	      pdo1_tx | pdo1_rx |

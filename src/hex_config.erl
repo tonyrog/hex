@@ -200,17 +200,39 @@ pattern(digital) -> ?HEX_DIGITAL;
 pattern(analog) -> ?HEX_ANALOG;
 pattern(encoder) -> ?HEX_ENCODER;
 pattern(rfid) -> ?HEX_RFID;
+pattern(power_on) -> ?HEX_POWER_ON;
+pattern(power_off) -> ?HEX_POWER_OFF;
+pattern(wakeup) -> ?HEX_WAKEUP;
+pattern(alarm) -> ?HEX_ALARM;
+pattern(output_add) -> ?HEX_OUTPUT_ADD;
+pattern(output_del) -> ?HEX_OUTPUT_DEL;
+pattern(output_active) -> ?HEX_OUTPUT_ACTIVE;
 pattern(Var) when is_atom(Var) -> Var;
 pattern({xcobid,Func,ID}) when ?is_uint25(ID) ->
     ?COBID_ENTRY_EXTENDED + (func(Func) bsl 25) + ID;
+pattern({xcobid,Func,self}) ->
+    ?COBID_ENTRY_EXTENDED + (func(Func) bsl 25) + (hex_self() band 16#1ffffff);
 pattern({xcobid,ID}) when ?is_uint29(ID) ->
     ?COBID_ENTRY_EXTENDED + ID;
+pattern({xcobid,self}) ->
+    ?COBID_ENTRY_EXTENDED + hex_self();
 pattern({cobid,Func,ID}) when ?is_uint7(ID) ->
     (func(Func) bsl 7) + ID;
+pattern({cobid,Func,self}) ->
+    (func(Func) bsl 7) + (hex_self() band 16#7f);
 pattern({cobid,ID}) when ?is_uint11(ID) ->
     ID;
+pattern({cobid,self}) ->
+    (hex_self() band 16#7ff);
 pattern([P|Ps]) -> [pattern(P)|pattern(Ps)];
 pattern([]) -> [].
+
+%% The nodeid may or may not have the extended flag...
+hex_self() ->
+    case application:get_env(hex, options) of
+	undefined -> 0;
+	{ok,Options} -> proplists:get_value(nodeid,Options,0)
+    end.
 
 %% translate function part of COB    
 func(nmt) -> ?NMT;
@@ -240,7 +262,9 @@ validate_event(App, Dir, Flags) when is_atom(App) ->
 	    validate_app_flags(App, Dir, Flags);
 	Error ->
 	    Error
-    end.
+    end;
+validate_event(_, _, _) ->
+    {error, bad_event_spec}.
 
 validate_app_flags(App, Dir, Flags) ->
     case code:ensure_loaded(App) of

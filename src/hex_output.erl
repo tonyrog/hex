@@ -44,7 +44,9 @@
 	 state_rampup/2,
 	 state_rampdown/2,
 	 state_deact/2]).
-	 
+
+-export([parse_bool_expr/1, rewrite_expr/1]).
+
 -define(SERVER, ?MODULE).
 
 -record(target, {
@@ -75,14 +77,14 @@
 	  repeat  = 0 :: integer(),        %% pulse repeat count
 	  feedback = 0 :: uint1(),         %% feedback frames as input
 	  transmit = 0 :: uint1(),         %% transmit frames 
-	  other = dict:new() :: dict()     %% others value name => value
+	  other = dict:new() :: dict:dict() %% others value name => value
 	 }).
 
 -record(state, {
 	  nodeid  = 0 :: uint32(),         %% id of hex node
 	  chan    = 0 :: uint8(),          %% output number 1..254
 	  ramp_min = 20 :: uint32(),       %% min time quanta in during ramp
-	  targets :: dict(),               %% dictionary of name -> #target {}
+	  targets :: dict:dict(),          %% dictionary of name -> #target {}
 	  in_config = #opt {} :: #opt{},   %% config values
 	  out_config :: #opt{},            %% mapped config values
 	  counter = 0 :: uint32(),         %% repeat counter
@@ -90,6 +92,12 @@
 	  tramp   = undefined :: undefined | reference(),
 	  deactivate = false :: boolean(), %% set while deactivate
 	  inhibited  = false :: boolean(), %% disallow activation
+	  active = "value" :: string(),    %% input string
+	  active_expr = 'value' :: term(), %% parse form of active
+	  active_value = 0,                %% last output active value
+	  output_active = "value" :: string(), %% output active signal
+	  output_active_expr = 'value' :: term(),  %% parse output_active
+	  output_active_value = 0,         %% active message sent?
 	  env     = [],                    %% enironment for last event
 	  actions = []
 	 }).
@@ -108,11 +116,8 @@ getopts(Pid, Flags) ->
     gen_fsm:sync_send_all_state_event(Pid, {getopts,Flags}).
 
 validate_flags(Flags) ->
+    %% fixme: special treat 'active' and 'output_active'
     hex:validate_flags(Flags, event_spec()).
-%%    case set_options(Flags, #opt {}, dict:new(), #state{}) of
-%%	{ok,_,_,_} -> ok;
-%%	Error -> Error
-%%    end.
 
 event_spec() ->
     [
@@ -125,6 +130,11 @@ event_spec() ->
 		       {description, "The min step in ms for each output "
 			"change in ramp -up or -down.", []}
 		      ]},
+     {leaf, input, [{type,uint32, []},
+		    {default, 0, []},
+		    %% {config, false, []},
+		    {description, "The input value", []}
+		   ]},
      {leaf, min_value, [{type,uint32, []},
 			{default, 0, []},
 			{description, "same as target.value.out_min", []}
@@ -136,7 +146,7 @@ event_spec() ->
      {leaf, value, [{type,uint32, []},
 		    {default, 0, []},
 		    %% {config, false, []},
-		    {description, "The input value", []}
+		    {description, "The output value", []}
 		   ]},
      {leaf, inhibit, [{type,uint32, []},
 		      {default, 0, []},
@@ -197,6 +207,21 @@ event_spec() ->
 		      "all nodes in the network to monitor the output "
 		      "actions.", []}
 		    ]},
+     {leaf,active,[{type,string,[]},
+		   {default,"value", []},
+		   {description, "Expression describing when an output will "
+		    "become active or inactive. The expression is a boolean "
+		    "valued expression that can use all target as variables "
+		    "and the 'normal' logical and comparison connectives",[]}
+		   ]},
+     {leaf,output_active, [{type,string,[]},
+			   {default,"value", []},
+			   {description, "Expression describing when an "
+			    "activation signal will be sent. The expression is "
+			    "a boolean valued expression that can use all "
+			    "target as variables and the 'normal' logical and "
+			    "comparison connectives",[]}
+			  ]},
      {list,target,
       [{description, 
 	"Declare the name of the id in the action spec that "
@@ -255,15 +280,19 @@ start_link(Flags, Actions) ->
 init({Flags,Actions}) ->
     Value = #target { name=value, type=clamp, delta=1.0, pos=#opt.value },
     Targets = dict:from_list([{value,Value}]),
-    case set_options(Flags, #opt { }, Targets, #state{}) of
-	{ok, IConfig, Targets1, State1} ->
-	    OConfig = map_config(IConfig, Targets1),
-	    State2 = State1#state {
-		       in_config  = IConfig,
-		       out_config = OConfig,
-		       targets = Targets1, 
-		       actions = Actions },
-	    {ok, state_off, State2};
+    State0 = #state { actions = Actions,
+		      in_config = #opt {}, 
+		      out_config = #opt {},
+		      targets = Targets },
+    case set_options(Flags, State0) of
+	{ok, State1} ->
+	    case eval_expr(State1#state.active_expr, State1) of
+		0 ->
+		    {ok, state_off, State1#state { active_value = false }};
+		_ ->
+		    transmit_active(1, State1),
+		    {ok, state_on, State1#state { active_value = true }}
+	    end;			 
 	Error ->
 	    {stop, Error}
     end.
@@ -283,31 +312,32 @@ init({Flags,Actions}) ->
 %%                   {stop, Reason, NewState}
 %% @end
 %%--------------------------------------------------------------------
-state_off(Event={digital,1,Src}, State) ->
-    if State#state.inhibited ->
-	    ?verbose("inhibited in state_off", []),
-	    {next_state, state_off, State};
-       true ->
-	    do_activate(Event, State#state { env = [{source,Src}] })
+state_off(Event={Name,{_Type,Value,Src}}, State) when
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    {next_state, state_off, State1};
+	{_Active,_Value1,State1} ->
+	    if State1#state.inhibited ->
+		    ?verbose("inhibited in state_off", []),
+		    {next_state, state_off, State1};
+	       true ->
+		    {_,{_,_,Src}} = Event,
+		    do_activate(Event, State1#state { env = [{source,Src}] })
+	    end
     end;
-
-%% FIXME: when do we process analog input 
-state_off({analog,Val,Src}, State) ->
-    Env = [{value,Val}, {source,Src}],
-    %% Map me?
-    State1 = action(?HEX_ANALOG, Val, State#state.actions, Env, State),
-    {next_state, state_off, State1};
 state_off(_Event, State) ->
+    lager:debug("ignore event ~p", [_Event]),
     {next_state, state_off, State}.
 
-state_on({digital,0,Src}, State) ->
-    do_deactivate(init, State#state { env = [{source,Src}] });
-
-%% FIXME: when do we process analog input 
-state_on({analog,Val,Src}, S) ->
-    Env = [{value,Val}, {source,Src}],
-    S1 = action(?HEX_ANALOG, Val, S#state.actions, Env, S),
-    {next_state, state_on, S1};
+state_on(Event={Name,{_Type,Value,Src}}, State) when
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    do_deactivate(init, State1#state { env = [{source,Src}] });
+	{_Active, _Value1, State1} ->
+	    {next_state, state_on, State1}
+    end;
 state_on(_Event, S) ->
     lager:debug("ignore event ~p", [_Event]),
     {next_state, state_on, S}.
@@ -327,12 +357,18 @@ state_delay(init, State) ->
 state_delay({timeout,TRef,delay}, State) when State#state.tref =:= TRef ->
     State1 = State#state { tref = undefined },
     state_rampup(init, State1);
-state_delay({digital,0,Src}, State) ->
-    lager:debug("activation cancelled from", [Src]),
-    do_off(State);
-state_delay(_Event, S) ->
+state_delay(Event={Name,{_Type,Value,Src}}, State) when 
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    lager:debug("activation cancelled from", [Src]),
+	    do_off(State1);
+	{_Active,_Value1,State1} ->
+	    {next_state, state_delay, State1}
+    end;
+state_delay(_Event, State) ->
     lager:debug("state_delay: ignore event ~p", [_Event]),
-    {next_state, state_delay, S}.
+    {next_state, state_delay, State}.
 
 %% Ramping up output over rampup time milliseconds
 state_rampup(init, State) ->
@@ -386,12 +422,20 @@ state_rampup({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
     ?verbose("rampup: T=~w A=~w", [1.0, A]),
     State2 = output_value(?HEX_ANALOG, A, Trg, State1),
     state_sustain(init, State2);
-state_rampup(Event={digital,0,Src}, State) ->
-    lager:debug("rampup cancelled from", [Src]),
-    gen_fsm:cancel_timer(State#state.tref),
-    gen_fsm:cancel_timer(State#state.tramp),
-    %% fixme pick up remain time and calculate ramp down from that level
-    do_deactivate(Event, State#state { tref=undefined, tramp=undefined });
+
+state_rampup(Event={Name,{_Type,Value,Src}}, State) when 
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    lager:debug("rampup cancelled from", [Src]),
+	    gen_fsm:cancel_timer(State1#state.tref),
+	    gen_fsm:cancel_timer(State1#state.tramp),
+	    %% fixme pick up remain time and calculate ramp down from that level
+	    do_deactivate(Event, State1#state { tref=undefined, 
+						tramp=undefined });
+	{_Active,_Value1,State1} ->
+	    {next_state, state_rampup, State1}
+    end;
 state_rampup(_Event, S) ->
     lager:debug("state_rampup: ignore event ~p", [_Event]),
     {next_state, state_rampup, S}.
@@ -414,10 +458,17 @@ state_sustain(init, State) ->
     end;
 state_sustain({timeout,TRef,sustain}, State) when State#state.tref =:= TRef ->
     state_deact(init, State#state { tref=undefined });
-state_sustain(Event={digital,0,Src}, State) ->
-    lager:debug("sustain cancelled from", [Src]),
-    gen_fsm:cancel_timer(State#state.tref),
-    do_deactivate(Event, State#state { tref = undefined });
+
+state_sustain(Event={Name,{_Type,Value,Src}}, State) when 
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    lager:debug("sustain cancelled from", [Src]),
+	    gen_fsm:cancel_timer(State1#state.tref),
+	    do_deactivate(Event, State1#state { tref = undefined });
+	{_Active,_Value1,State1} ->
+	    {next_state, state_sustain, State1}
+    end;
 state_sustain(_Event, S) ->
     lager:debug("state_sustain: ignore event ~p", [_Event]),
     {next_state, state_sustain, S}.
@@ -435,16 +486,24 @@ state_deact(init, State) ->
     end;
 state_deact({timeout,TRef,deact}, State) when State#state.tref =:= TRef ->
     state_rampdown(init, State#state { tref=undefined });
-state_deact(_Event={digital,1,Src}, State) ->
-    if State#state.inhibited ->
-	    ?verbose("inhibited in state_deact", []),
-	        {next_state, state_deact, State};
-       true ->
-	    lager:debug("deact cancelled from", [Src]),
-	    _Remain = gen_fsm:cancel_timer(State#state.tref),
-	    %% calculate remain sustain? or think if this as reactivation?
-	    state_sustain(init, State#state { tref = undefined, 
-					      deactivate=false })
+
+state_deact(Event={Name,{_Type,Value,Src}}, State) when 
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    {next_state, state_deact, State1};
+	{Active, _Value1, State1} when Active =/= 0 ->
+	    if State1#state.inhibited ->
+		    ?verbose("inhibited in state_deact", []),
+		    {next_state, state_deact, State1};
+	       true ->
+		    lager:debug("deact cancelled from", [Src]),
+		    _Remain = gen_fsm:cancel_timer(State#state.tref),
+		    %% FIXME: calculate remain sustain? 
+		    %% or think if this as reactivation?
+		    state_sustain(init, State1#state { tref = undefined, 
+						       deactivate=false })
+	    end
     end;
 state_deact(_Event, S) ->
     lager:debug("state_deact: ignore event ~p", [_Event]),
@@ -502,20 +561,24 @@ state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
     ?verbose("rampdown: T=~w A=~w", [1.0, A]),
     State2 = output_value(?HEX_ANALOG, A, Trg, State1),
     state_wait(init, State2);
-state_rampdown(_Event={digital,1,Src}, State) ->
-    if State#state.inhibited ->
-	    ?verbose("inhibited in state_rampdown", []),
-	    {next_state, state_rampdown, State};
-       true ->
-	    lager:debug("rampdown cancelled from", [Src]),
-	    _Remain = gen_fsm:cancel_timer(State#state.tref),
-	    state_rampup(init, State#state { tref = undefined,
-					     deactivate=false })
+state_rampdown(Event={Name,{_Type,Value,Src}}, State) when 
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    lager:debug("deactivate during rampdown from", [Src]),
+	    %% mark for deactivation - when ramp is done
+	    {next_state, state_rampdown, State1#state { deactivate=true }};
+	{_Active,_Value1,State1} ->
+	    if State1#state.inhibited ->
+		    ?verbose("inhibited in state_rampdown", []),
+		    {next_state, state_rampdown, State1};
+	       true ->
+		    lager:debug("rampdown cancelled from", [Src]),
+		    _Remain = gen_fsm:cancel_timer(State1#state.tref),
+		    state_rampup(init, State1#state { tref = undefined,
+						      deactivate=false })
+	    end
     end;
-state_rampdown(_Event={digital,0,Src}, State) ->
-    lager:debug("deactivate during rampdown from", [Src]),
-    %% mark for deactivation - when ramp is done
-    {next_state, state_rampdown, State#state { deactivate=true }};
 state_rampdown(_Event, S) ->
     lager:debug("state_rampdown: ignore event ~p", [_Event]),
     {next_state, state_rampdown, S}.
@@ -544,9 +607,16 @@ state_wait({timeout,TRef,wait}, State) when State#state.tref =:= TRef ->
 	    do_reactivate(init, State#state { tref=undefined,
 					      counter = Repeat-1 })
     end;
-state_wait(_Event={digital,0,Src}, State) ->
-    lager:debug("deactivate during wait from", [Src]),
-    do_off(State);
+
+state_wait(Event={Name,{_Type,Value,Src}}, State) when 
+      is_atom(Name), is_integer(Value) ->
+    case do_input(Event, State) of
+	{0, _Value1, State1} ->
+	    lager:debug("deactivate during wait from", [Src]),
+	    do_off(State1);
+	{_Active,_Value1,State1} ->
+	    {next_state, state_wait, State1}
+    end;
 state_wait(_Event, State) ->
     lager:debug("state_wait: ignore event ~p", [_Event]),
     {next_state, state_wait, State}.
@@ -636,11 +706,9 @@ handle_sync_event({getopts,Flags}, _From, StateName, State) ->
     end;
 
 handle_sync_event({setopts,Opts}, _From, StateName, State) ->
-    case set_options(Opts, State#state.in_config,State#state.targets,State) of
-	{ok, IConfig, Targets, State1} ->
-	    %% FIXME: map to output configs here!
-	    {reply, ok, StateName, 
-	     State1#state { in_config=IConfig, targets=Targets }};
+    case set_options(Opts, State) of
+	{ok, State1} ->
+	    {reply, ok, StateName, State1};
 	Error ->
 	    {reply, Error, StateName, State}
     end;
@@ -665,58 +733,6 @@ handle_sync_event(_Event, _From, StateName, State) ->
 handle_info({timeout,_Ref,inhibit_done}, StateName, State) ->
     ?verbose("inhibitation stopped",[]),
     {next_state, StateName, State#state { inhibited=false}};
-
-%% only when state_on?
-handle_info(_Info={Name,{encoder,Delta,_Src}}, StateName, State) ->
-    case dict:find(Name, State#state.targets) of
-	error ->
-	    lager:error("target ~s not found: event ~p", 
-			[Name, _Info]),
-	    {next_state, StateName, State};
-	{ok,Target} ->
-	    IConfig = State#state.in_config,
-	    X = case Target#target.pos of
-		    #opt.other ->
-			dict:fetch(Target#target.name, IConfig#opt.other);
-		    Pos ->
-			element(Pos, IConfig)
-		end,
-	    {Value,State1} = set_value(Target, X, Delta, State),
-	    Env = [{Name,Value}],
-	    State2 = action(?HEX_ANALOG,Value,State#state.actions,Env,State1),
-	    {next_state, StateName, State2}
-    end;
-%% only when state_on?
-handle_info(_Info={Name,{Type,X,_Src}}, StateName, State) when
-      Type =:= analog;
-      Type =:= ?HEX_ANALOG ->
-    case dict:find(Name, State#state.targets) of
-	error ->
-	    lager:error("target ~s not found: event ~p", 
-			[Name, _Info]),
-	    {next_state, StateName, State};
-	{ok,Target} ->
-	    {Value,State1} = set_value(Target, X, 0, State),
-	    Env = [{Name,Value}],
-	    State2 = action(?HEX_ANALOG,Value,State#state.actions,
-			    Env,State1),
-	    {next_state, StateName, State2}
-    end;
-handle_info(_Info={Name,{Type,X,_Src}}, StateName, State) 
-  when Type =:= digital; 
-       Type =:= ?HEX_DIGITAL;
-       Type =:= ?HEX_OUTPUT_ACTIVE ->
-    case dict:find(Name, State#state.targets) of
-	error ->
-	    lager:error("target ~s not found: event ~p", 
-			[Name, _Info]),
-	    {next_state, StateName, State};
-	{ok,Target} ->
-	    {Value,State1} = set_value(Target, X, 0, State),
-	    Env = [{Name,Value}],
-	    State2 = action(?HEX_DIGITAL,Value,State#state.actions,Env,State1),
-	    {next_state, StateName, State2}
-    end;
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -750,76 +766,101 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-value_target(State) ->
-    %% maybe cache in State?
-    dict:fetch(value,State#state.targets).
 
 %%
 %% Set output options
 %%
-set_options([Opt|Options], Config, Targets, State) ->
+set_options([Opt|Options], State) ->
     case Opt of
 	{nodeid,Value} ->
 	    if ?is_uint32(Value) ->
 		    State1 = State#state { nodeid=Value },
-		    set_options(Options, Config, Targets, State1);
+		    set_options(Options, State1);
 	       true ->
 		    {error, {badarg,Opt}}
 	    end;
+
+	{active,Value} when is_list(Value) ->
+	    try parse_bool_expr(Value) of
+		Expr -> 
+		    State1 = State#state { active = Value,
+					   active_expr = Expr },
+		    set_options(Options, State1)
+	    catch
+		error:_Reason ->
+		    {error, {badarg,Opt}}
+	    end;
+
 	{chan,Value} ->
 	    if ?is_uint8(Value) ->
 		    State1 = State#state { chan=Value },
-		    set_options(Options, Config, Targets, State1);
+		    set_options(Options, State1);
 	       true ->
 		    {error, {badarg,Opt}}
 	    end;
+
 	{ramp_min,Value} ->
 	    if ?is_uint32(Value) ->
 		    State1 = State#state { ramp_min=min(20,Value) },
-		    set_options(Options, Config, Targets, State1);
+		    set_options(Options, State1);
 	       true ->
 		    {error, {badarg,Opt}}
 	    end;
+
 	{min_value,Value} when ?is_uint32(Value) ->
+	    %% same as: setopts([{target,[{name,value},{out_min,Value}]}])
+	    Targets = State#state.targets,
 	    {ok,Target} = dict:find(value, Targets),
 	    Target1 = Target#target { out_min = Value },
 	    Targets1 = dict:store(value, Target1, Targets),
-	    set_options(Options, Config, Targets1, State);
+	    set_options(Options, State#state { targets=Targets1 });
+
 	{max_value,Value} when ?is_uint32(Value) ->
+	    %% same as: setopts([{target,[{name,value},{out_max,Value}]}])
+	    Targets = State#state.targets,
 	    {ok,Target} = dict:find(value, Targets),
 	    Target1 = Target#target { out_max = Value },
 	    Targets1 = dict:store(value, Target1, Targets),
-	    set_options(Options, Config, Targets1, State);
+	    set_options(Options, State#state { targets=Targets1 });
+
 	{target,Value} ->
+	    Targets = State#state.targets,
 	    try set_target(Value, Targets) of
-		Targets1 -> set_options(Options, Config, Targets1, State)
+		Target ->
+		    Targets1 = dict:store(Target#target.name,Target,Targets),
+		    X = target_in_value(Target, State),
+		    {_Out,State1} = set_value(Target, X, 0, State),
+		    set_options(Options, State1#state { targets=Targets1 })
 	    catch
 		error:_ ->
 		    {error, {badarg, Opt}}
 	    end;
-	{Option,Value} ->
-	    try set_option(Option, Value, Config) of
-		Config1 -> set_options(Options,Config1,Targets,State)
+
+	{Name,Value} ->
+	    try set_option(Name, Value, State#state.in_config) of
+		IC ->
+		    State1 = State#state { in_config=IC },
+		    case dict:find(Name, State1#state.targets) of
+			error ->
+			    OC = set_option(Name,Value,State1#state.out_config),
+			    set_options(Options, State1#state {out_config=OC});
+			{ok,Target} ->
+			    {_Out,State2}=set_value(Target,Value,0,State1),
+			    set_options(Options, State2)
+		    end
 	    catch
 		error:_ ->
 		    {error, {badarg, Opt}}
-	    end;
-	_ when is_atom(Opt) ->
-	    try set_option(Opt, true, Config) of
-		Config1 -> set_options(Options,Config1,Targets,State)
-	    catch
-		error:_ ->
-		    {error, {badarg,Opt}}
 	    end;
 	_ ->
 	    {error, {badarg,Opt}}
     end;
-set_options([], Config, Targets, State) ->
-    {ok, Config, Targets, State}.
+set_options([], State) ->
+    {ok, State}.
 
 set_option(K, V, Config) ->
     case K of
-	value when ?is_uint32(V)  ->  Config#opt { value = V };
+	value when ?is_uint32(V) ->  Config#opt { value = V };
 	inhibit when ?is_timeout(V) -> Config#opt  { inhibit = V };
 	delay   when ?is_timeout(V) -> Config#opt  { delay = V };
 	rampup  when ?is_timeout(V) -> Config#opt  { rampup = V };
@@ -843,32 +884,103 @@ set_target(Options, Dict) ->
     {name,Name} = proplists:lookup(name, Options),
     case dict:find(Name, Dict) of
 	error ->
-	    set_target(Options, #target {}, Dict);
+	    set_target_(Options, #target {});
 	{ok,Target} ->
-	    set_target(Options, Target, Dict)
+	    set_target_(Options, Target)
     end.
 
-set_target([{K,V}|Opts], Target, Dict) ->
+set_target_([{K,V}|Opts], Target) ->
     case K of
-	name when is_atom(V) -> 
-	    set_target(Opts, Target#target { name=V }, Dict);
+	name when is_atom(V) ->
+	    set_target_(Opts, Target#target { name=V });
+	name when is_list(V) ->
+	    set_target_(Opts, Target#target { name=list_to_atom(V) });
 	type when V =:= clamp; V =:= wrap ->
-	    set_target(Opts, Target#target { type=V }, Dict);
+	    set_target_(Opts, Target#target { type=V });
 	in_min when ?is_uint32(V) -> 
-	    set_target(Opts, Target#target { in_min = V }, Dict);
+	    set_target_(Opts, Target#target { in_min = V });
 	in_max when ?is_uint32(V) -> 
-	    set_target(Opts, Target#target { in_max = V }, Dict);
+	    set_target_(Opts, Target#target { in_max = V });
 	out_min when ?is_uint32(V) -> 
-	    set_target(Opts, Target#target { out_min = V }, Dict);
+	    set_target_(Opts, Target#target { out_min = V });
 	out_max when ?is_uint32(V) ->
-	    set_target(Opts, Target#target { out_max = V }, Dict)
+	    set_target_(Opts, Target#target { out_max = V })
     end;
-set_target([], Target, Dict) ->
+set_target_([], Target) ->
     #target { in_min = X0, in_max = X1, out_min = Y0, out_max = Y1 } = Target,
     Delta = (Y1-Y0) / (X1 - X0),
     Name = Target#target.name,
-    Target1 = Target#target { delta = Delta, pos = target_pos(Name) },
-    dict:store(Target1#target.name, Target1, Dict).
+    Target#target { delta = Delta, pos = target_pos(Name) }.
+
+
+value_target(State) ->
+    dict:fetch(value,State#state.targets).
+
+target_in_value(Target, State) ->
+    target_value(Target, State#state.in_config).
+
+target_out_value(Target, State) ->
+    target_value(Target, State#state.out_config).
+    
+target_value(Target, Config) ->
+    case Target#target.pos of
+	#opt.other ->
+	    case dict:find(Target#target.name, Config#opt.other) of
+		error -> 0;
+		{ok,X} -> X
+	    end;
+	Pos ->
+	    element(Pos, Config)
+    end.
+
+do_input({Name,{digital,Value,Src}}, State) ->
+    do_input(?HEX_DIGITAL,Name, Value, 0, Src, State);
+do_input({Name,{analog,Value,Src}}, State) ->
+    do_input(?HEX_ANALOG,Name, Value, 0, Src, State);
+do_input({Name,{encoder,Delta,Src}}, State) ->
+    do_input(?HEX_ANALOG,Name, 0, Delta, Src, State);
+do_input({Name,{?HEX_DIGITAL,Value,Src}}, State) ->
+    do_input(?HEX_DIGITAL,Name, Value, 0, Src, State);
+do_input({Name,{?HEX_ANALOG,Value,Src}}, State) ->
+    do_input(?HEX_ANALOG,Name, Value, 0, Src, State);
+do_input({Name,{?HEX_ENCODER,Delta,Src}}, State) ->
+    do_input(?HEX_ANALOG,Name, 0, Delta, Src, State);
+do_input({Name,{?HEX_OUTPUT_ACTIVE,Value,Src}}, State) ->
+    do_input(?HEX_DIGITAL,Name, Value, 0, Src, State);
+do_input(_Event, State) ->
+    lager:debug("ignore event ~p", [_Event]),
+    {State#state.active_value, 0, State}.
+
+do_input(Type, Name, Value, Delta, Src, State) ->
+    case dict:find(Name, State#state.targets) of
+	error ->
+	    lager:error("target ~s not found", [Name]),
+	    {State#state.active_value, 0, State};
+	{ok,Target} ->
+	    Value1 = if Delta =/= 0 ->
+			     Value + Delta + target_in_value(Target, State);
+			true ->
+			     Value
+		     end,
+	    {Value2,State1} = set_value(Target, Value1, Delta, State),
+	    ActiveValue = eval_expr(State1#state.active_expr, State1),
+	    lager:debug("do_input: expr=~w, active=~w, value=~w", 
+			[State1#state.active_expr,ActiveValue,Value2]),
+	    %% run action when:
+	    %% output is enabled (or just was) and 
+	    %% the target is not value or not a digital value
+	    State2 = 
+		if ((ActiveValue =/= 0) orelse 
+		    (State1#state.active_value =/= 0)) andalso
+		   ((Name =/= value) orelse (Type =/= ?HEX_DIGITAL)) ->
+			Env = [{Name,Value2}, {source,Src}],
+			action(Type,Value2,State#state.actions,Env,State1);
+		   true ->
+			State1
+		end,
+	    {ActiveValue, Value2, State2#state { active_value = ActiveValue }}
+    end.
+
 
 set_value(Target, X, Delta, State) ->
     Xi = constrain_in_value(X + Delta, Target),
@@ -890,32 +1002,8 @@ set_value(Target, X, Delta, State) ->
 	end,
     {Xo,State1}.
 
-
 map_value(X, #target { in_min=X0, out_min=Y0, delta=D }) ->
     trunc((X - X0) * D + Y0).
-
-%% map all input configs through targets dictionary
-map_config(ConfigIn, Targets) ->
-    dict:fold(
-      fun (Name,Target=#target{pos=#opt.other},ConfigOut) ->
-	      X = case dict:find(Name, ConfigIn#opt.other) of
-		      error -> 0;
-		      {ok,X0} -> X0
-		  end,
-	      Xi = constrain_in_value(X, Target),
-	      Xo = map_value(Xi, Target),
-	      ?verbose("target ~s in:~w, constrained:~w, mapped:~w",
-		       [Name,X,Xi,Xo]),
-	      Other = dict:store(Name, Xo, ConfigOut#opt.other),
-	      ConfigOut#opt { other = Other };
-	  (Name,Target=#target{pos=Pos},ConfigOut) ->
-	      X = element(Pos,ConfigIn),
-	      Xi = constrain_in_value(X, Target),
-	      Xo = map_value(Xi, Target),
-	      ?verbose("target ~s in:~w, constrained:~w, mapped:~w",
-		       [Name,X,Xi,Xo]),
-	      setelement(Pos, ConfigOut, Xo)
-      end, ConfigIn, Targets).
 
 constrain_in_value(X, Target) when Target#target.type =:= wrap ->
     wrap_in_value(X, Target);
@@ -976,10 +1064,32 @@ target_pos(K) ->
 
 get_options([nodeid|Ks], Config, State, Acc) ->
     get_options(Ks, Config, State, [{nodeid,State#state.nodeid}|Acc]);
+get_options([active|Ks], Config, State, Acc) ->
+    get_options(Ks, Config, State, [{active,State#state.active}|Acc]);
 get_options([chan|Ks], Config, State, Acc) ->
     get_options(Ks, Config, State, [{chan,State#state.chan}|Acc]);
 get_options([ramp_min|Ks], Config, State, Acc) ->
     get_options(Ks, Config, State, [{ramp_min,State#state.ramp_min}|Acc]);
+get_options([min_value|Ks], Config, State, Acc) ->
+    #target { out_min=Min } = value_target(State),
+    get_options(Ks, Config, State, [{min_value,Min}|Acc]);
+get_options([max_value|Ks], Config, State, Acc) ->
+    #target { out_max=Max } = value_target(State),
+    get_options(Ks, Config, State, [{max_value,Max}|Acc]);
+get_options([{target,Name}|Ks], Config, State, Acc) ->
+    case dict:find(Name, State#state.targets) of
+	error ->
+	    get_options(Ks, Config, State, Acc);
+	{ok,Target} ->
+	    get_options(Ks, Config, State,
+			[{target,[{name,Name},
+				  {type,Target#target.type},
+				  {in_min,Target#target.in_min},
+				  {in_max,Target#target.in_max},
+				  {out_min,Target#target.out_min},
+				  {out_max,Target#target.out_max}]} |
+			 Acc])
+    end;
 get_options([K|Ks], Config, State, Acc) ->
     get_options(Ks, Config, State, [{K,get_option(K,Config)}|Acc]);
 get_options([], _Config, _State, Acc) ->
@@ -1051,11 +1161,8 @@ feedback(Type,Value, State) ->
     feedback_signal(Signal, Env, State),
     transmit_signal(Signal, Env, State).
 
-
 action(Type, Value, Action, Env, S) ->
     lager:debug("action type=~.16B, value=~w, env=~w\n", [Type,Value,Env]),
-    %% fixme: probably better to convert to analog, then
-    %% have feedback input to remap to digital again.
     feedback(Type, Value, S),
     if is_list(Action) ->
 	    action_list(Value, Action, Env, S);
@@ -1063,6 +1170,7 @@ action(Type, Value, Action, Env, S) ->
 	    action_list(Value, [{Value,Action}], Env, S)
     end.
 
+%% FIXME Change Match to Cond expression!!!
 action_list(Value, [{Match,Action} | Actions], Env, S) ->
     case hex_server:match_value(Match, Value) of
 	true ->
@@ -1084,3 +1192,142 @@ execute({App, AppFlags}, Env) ->
 	    lager:error("execute ~p = ~p", [{App,AppFlags}, {error,Reason}]),
 	    {error,Reason}
     end.
+
+parse_bool_expr(String) when is_list(String) ->
+    {ok,Ts,_} = erl_scan:string(String),
+    {ok,[Expr]} = erl_parse:parse_exprs(Ts ++ [{dot,1}]),
+    rewrite_expr(Expr).
+
+rewrite_expr({atom,_,true})  -> 1;
+rewrite_expr({atom,_,false}) -> 0;
+rewrite_expr({atom,_,Target}) when is_atom(Target) -> Target;
+rewrite_expr({var,_,Target}) when is_atom(Target) -> Target;
+rewrite_expr({integer,_,Value}) -> Value;
+
+rewrite_expr({op,_,'and',A,B}) -> {'and',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'or',A,B}) ->  {'or',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'xor',A,B}) ->  {'xor',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'not',A}) ->  {'not',rewrite_expr(A)};
+
+%% arithmetical
+rewrite_expr({op,_,'+',A,B}) -> {'+',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'-',A,B}) ->  {'-',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'*',A,B}) ->  {'*',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'div',A,B}) -> {'div',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'rem',A,B}) -> {'rem',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'-',A}) ->  {'-',rewrite_expr(A)};
+
+%% comparison
+rewrite_expr({op,_,'==',A,B}) -> {'==',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'/=',A,B}) -> {'/=',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'=<',A,B}) -> {'=<',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'<',A,B}) -> {'<',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'>=',A,B}) -> {'>=',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'>',A,B}) -> {'>',rewrite_expr(A),rewrite_expr(B)}.
+
+%%
+%% Evaluate expression
+%%
+eval_expr(Value, _S) when is_integer(Value) -> Value;
+eval_expr(Name,S) when is_atom(Name) ->
+    case dict:find(Name, S#state.targets) of
+	error ->
+	    lager:error("target ~s not found", [Name]),
+	    0;
+	{ok,Target} ->
+	    OConfig = S#state.out_config,
+	    case Target#target.pos of
+		#opt.other ->
+		    dict:fetch(Name, OConfig#opt.other);
+		Pos ->
+		    element(Pos, OConfig)
+	    end
+    end;
+%% logical
+eval_expr({'and',A,B},S) -> 
+    case eval_expr(A,S) of
+	0 -> 0;
+	_ -> eval_expr(B,S)
+    end;
+eval_expr({'or',A,B},S) ->
+    case eval_expr(A,S) of
+	0 -> eval_expr(B,S);
+	V -> V
+    end;
+eval_expr({'xor',A,B},S) ->
+    case eval_expr(A,S) of
+	0 -> 
+	    case eval_expr(B,S) of
+		0 -> 1;
+		V -> V
+	    end;
+	_ -> 
+	    case eval_expr(B,S) of
+		0 -> 1;
+		W -> W
+	    end
+    end;
+eval_expr({'not',A},S) ->
+    case eval_expr(A,S) of
+	0 -> 1;
+	_ -> 0
+    end;
+%% arithmetical
+eval_expr({'+',A,B},S) -> 
+    eval_expr(A,S)+eval_expr(B,S);
+eval_expr({'-',A,B},S) -> 
+    eval_expr(A,S)-eval_expr(B,S);
+eval_expr({'*',A,B},S) -> 
+    eval_expr(A,S)*eval_expr(B,S);
+eval_expr({'div',A,B},S) ->
+    case eval_expr(B,S) of
+	0 -> 
+	    lager:error("division by zero", []),
+	    0;
+	D ->
+	    eval_expr(A,S) div D
+    end;
+eval_expr({'rem',A,B},S) -> 
+    case eval_expr(B,S) of
+	0 -> 
+	    lager:error("division by zero", []),
+	    0;
+	D ->
+	    eval_expr(A,S) rem D
+    end;
+eval_expr({'-',A},S) -> 
+    -eval_expr(A,S);
+
+%% comparision
+eval_expr({'==',A,B},S) -> 
+    case eval_expr(A,S) =:= eval_expr(B,S) of
+	true -> 1;
+	false -> 0
+    end;
+eval_expr({'/=',A,B},S) -> 
+    case eval_expr(A,S) =/= eval_expr(B,S) of
+	true -> 1;
+	false -> 0
+    end;
+eval_expr({'=<',A,B},S) -> 
+    case eval_expr(A,S) =< eval_expr(B,S) of
+	true -> 1;
+	false -> 0
+    end;
+eval_expr({'<',A,B},S) -> 
+    case eval_expr(A,S) < eval_expr(B,S) of
+	true -> 1;
+	false -> 0
+    end;
+eval_expr({'>=',A,B},S) -> 
+    case eval_expr(A,S) >= eval_expr(B,S) of
+	true -> 1;
+	false -> 0
+    end;
+eval_expr({'>',A,B},S) -> 
+    case eval_expr(A,S) > eval_expr(B,S) of
+	true -> 1;
+	false -> 0
+    end.
+
+
