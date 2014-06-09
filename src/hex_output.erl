@@ -463,9 +463,10 @@ state_sustain(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
 	{0, _Value1, State1} ->
-	    lager:debug("sustain cancelled from", [Src]),
+	    lager:debug("sustain cancelled from ~w", [Src]),
 	    gen_fsm:cancel_timer(State1#state.tref),
-	    do_deactivate(Event, State1#state { tref = undefined });
+	    %% was Event
+	    do_deactivate(init, State1#state { tref = undefined });
 	{_Active,_Value1,State1} ->
 	    {next_state, state_sustain, State1}
     end;
@@ -592,7 +593,7 @@ state_wait(init, State) ->
        State1#state.counter =:= 0 ->
 	    do_off(State1);
        true ->
-	    %% context switch event if WaitTime = 0!
+	    %% context switch even if WaitTime = 0!
 	    TRef = gen_fsm:start_timer(WaitTime, wait),
 	    State2 = State1#state { tref = TRef },
 	    {next_state, state_wait, State2}
