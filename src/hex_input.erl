@@ -363,6 +363,7 @@ s_push(_, S) ->
 analog_input(IValue, Src, State, S) ->
     Opt = S#s.config,
     Value = trunc(IValue*Opt#opt.analog_scale + Opt#opt.analog_offs),
+    lager:debug("analog_input ~w: value=~w", [S#s.id,Value]),
     %% transform value
     if Opt#opt.analog_to_digital ->
 	    if Value >= Opt#opt.analog_max ->

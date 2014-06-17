@@ -45,8 +45,6 @@
 	 state_rampdown/2,
 	 state_deact/2]).
 
--export([parse_bool_expr/1, rewrite_expr/1]).
-
 -define(SERVER, ?MODULE).
 
 -record(target, {
@@ -277,9 +275,10 @@ start_link(Flags, Actions) ->
 %%                     {stop, StopReason}
 %% @end
 %%--------------------------------------------------------------------
-init({Flags,Actions}) ->
+init({Flags,Actions0}) ->
     Value = #target { name=value, type=clamp, delta=1.0, pos=#opt.value },
     Targets = dict:from_list([{value,Value}]),
+    Actions = rewrite_actions(Actions0),
     State0 = #state { actions = Actions,
 		      in_config = #opt {}, 
 		      out_config = #opt {},
@@ -782,7 +781,7 @@ set_options([Opt|Options], State) ->
 	    end;
 
 	{active,Value} when is_list(Value) ->
-	    try parse_bool_expr(Value) of
+	    try hex:parse_bool_expr(Value) of
 		Expr -> 
 		    State1 = State#state { active = Value,
 					   active_expr = Expr },
@@ -1165,19 +1164,16 @@ feedback(Type,Value, State) ->
 action(Type, Value, Action, Env, S) ->
     lager:debug("action type=~.16B, value=~w, env=~w\n", [Type,Value,Env]),
     feedback(Type, Value, S),
-    if is_list(Action) ->
-	    action_list(Value, Action, Env, S);
-       true ->
-	    action_list(Value, [{Value,Action}], Env, S)
-    end.
+    action_list(Value, Action, Env, S).
 
-%% FIXME Change Match to Cond expression!!!
-action_list(Value, [{Match,Action} | Actions], Env, S) ->
-    case hex_server:match_value(Match, Value) of
-	true ->
-	    execute(Action, Env),
+action_list(Value, [{Cond,Action} | Actions], Env, S) ->
+    case eval_expr(Cond, S) of
+	0 ->
+	    lager:debug("eval ~p = 0\n", [Cond]),
 	    action_list(Value, Actions, Env, S);
-	false ->
+	_Val ->
+	    lager:debug("eval ~p = ~p\n", [Cond,_Val]),
+	    execute(Action, Env),
 	    action_list(Value, Actions, Env, S)
     end;
 action_list(_Value, [], _Env, S) ->
@@ -1194,43 +1190,10 @@ execute({App, AppFlags}, Env) ->
 	    {error,Reason}
     end.
 
-parse_bool_expr(String) when is_list(String) ->
-    {ok,Ts,_} = erl_scan:string(String),
-    {ok,[Expr]} = erl_parse:parse_exprs(Ts ++ [{dot,1}]),
-    rewrite_expr(Expr).
+eval_expr(Expr, S) ->
+    hex:eval_expr(Expr, fun(V) -> lookup_var(V, S) end).
 
-rewrite_expr({atom,_,true})  -> 1;
-rewrite_expr({atom,_,false}) -> 0;
-rewrite_expr({atom,_,Target}) when is_atom(Target) -> Target;
-rewrite_expr({var,_,Target}) when is_atom(Target) -> Target;
-rewrite_expr({integer,_,Value}) -> Value;
-
-rewrite_expr({op,_,'and',A,B}) -> {'and',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'or',A,B}) ->  {'or',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'xor',A,B}) ->  {'xor',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'not',A}) ->  {'not',rewrite_expr(A)};
-
-%% arithmetical
-rewrite_expr({op,_,'+',A,B}) -> {'+',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'-',A,B}) ->  {'-',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'*',A,B}) ->  {'*',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'div',A,B}) -> {'div',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'rem',A,B}) -> {'rem',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'-',A}) ->  {'-',rewrite_expr(A)};
-
-%% comparison
-rewrite_expr({op,_,'==',A,B}) -> {'==',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'/=',A,B}) -> {'/=',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'=<',A,B}) -> {'=<',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'<',A,B}) -> {'<',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'>=',A,B}) -> {'>=',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'>',A,B}) -> {'>',rewrite_expr(A),rewrite_expr(B)}.
-
-%%
-%% Evaluate expression
-%%
-eval_expr(Value, _S) when is_integer(Value) -> Value;
-eval_expr(Name,S) when is_atom(Name) ->
+lookup_var(Name, S) ->
     case dict:find(Name, S#state.targets) of
 	error ->
 	    lager:error("target ~s not found", [Name]),
@@ -1243,92 +1206,14 @@ eval_expr(Name,S) when is_atom(Name) ->
 		Pos ->
 		    element(Pos, OConfig)
 	    end
-    end;
-%% logical
-eval_expr({'and',A,B},S) -> 
-    case eval_expr(A,S) of
-	0 -> 0;
-	_ -> eval_expr(B,S)
-    end;
-eval_expr({'or',A,B},S) ->
-    case eval_expr(A,S) of
-	0 -> eval_expr(B,S);
-	V -> V
-    end;
-eval_expr({'xor',A,B},S) ->
-    case eval_expr(A,S) of
-	0 -> 
-	    case eval_expr(B,S) of
-		0 -> 1;
-		V -> V
-	    end;
-	_ -> 
-	    case eval_expr(B,S) of
-		0 -> 1;
-		W -> W
-	    end
-    end;
-eval_expr({'not',A},S) ->
-    case eval_expr(A,S) of
-	0 -> 1;
-	_ -> 0
-    end;
-%% arithmetical
-eval_expr({'+',A,B},S) -> 
-    eval_expr(A,S)+eval_expr(B,S);
-eval_expr({'-',A,B},S) -> 
-    eval_expr(A,S)-eval_expr(B,S);
-eval_expr({'*',A,B},S) -> 
-    eval_expr(A,S)*eval_expr(B,S);
-eval_expr({'div',A,B},S) ->
-    case eval_expr(B,S) of
-	0 -> 
-	    lager:error("division by zero", []),
-	    0;
-	D ->
-	    eval_expr(A,S) div D
-    end;
-eval_expr({'rem',A,B},S) -> 
-    case eval_expr(B,S) of
-	0 -> 
-	    lager:error("division by zero", []),
-	    0;
-	D ->
-	    eval_expr(A,S) rem D
-    end;
-eval_expr({'-',A},S) -> 
-    -eval_expr(A,S);
-
-%% comparision
-eval_expr({'==',A,B},S) -> 
-    case eval_expr(A,S) =:= eval_expr(B,S) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'/=',A,B},S) -> 
-    case eval_expr(A,S) =/= eval_expr(B,S) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'=<',A,B},S) -> 
-    case eval_expr(A,S) =< eval_expr(B,S) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'<',A,B},S) -> 
-    case eval_expr(A,S) < eval_expr(B,S) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'>=',A,B},S) -> 
-    case eval_expr(A,S) >= eval_expr(B,S) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'>',A,B},S) -> 
-    case eval_expr(A,S) > eval_expr(B,S) of
-	true -> 1;
-	false -> 0
     end.
 
-
+rewrite_actions({App,Flags}) -> [{1, {App,Flags}}];
+rewrite_actions([{Expr,{App,Flags}} | Actions]) ->
+    Expr1 = if Expr =:= [] -> 1;
+	       is_integer(Expr) -> {'==',value,Expr};
+	       is_list(Expr) -> hex:parse_bool_expr(Expr)
+	    end,
+    [{Expr1,{App,Flags}} | rewrite_actions(Actions)];
+rewrite_actions([]) ->
+    [].
