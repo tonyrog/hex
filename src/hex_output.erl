@@ -287,10 +287,10 @@ init({Flags,Actions0}) ->
 	{ok, State1} ->
 	    case eval_expr(State1#state.active_expr, State1) of
 		0 ->
-		    {ok, state_off, State1#state { active_value = false }};
-		_ ->
+		    {ok, state_off, State1#state { active_value = 0 }};
+		V ->
 		    transmit_active(1, State1),
-		    {ok, state_on, State1#state { active_value = true }}
+		    {ok, state_on, State1#state { active_value = V }}
 	    end;			 
 	Error ->
 	    {stop, Error}
@@ -429,7 +429,6 @@ state_rampup(Event={Name,{_Type,Value,Src}}, State) when
 	    lager:debug("rampup cancelled from", [Src]),
 	    gen_fsm:cancel_timer(State1#state.tref),
 	    gen_fsm:cancel_timer(State1#state.tramp),
-	    %% fixme pick up remain time and calculate ramp down from that level
 	    do_deactivate(Event, State1#state { tref=undefined, 
 						tramp=undefined });
 	{_Active,_Value1,State1} ->
@@ -964,8 +963,10 @@ do_input(Type, Name, Value, Delta, Src, State) ->
 		     end,
 	    {Value2,State1} = set_value(Target, Value1, Delta, State),
 	    ActiveValue = eval_expr(State1#state.active_expr, State1),
-	    lager:debug("do_input: expr=~w, active=~w, value=~w", 
-			[State1#state.active_expr,ActiveValue,Value2]),
+	    lager:debug("do_input: expr=~w,old_active=~w,active=~w,value=~w", 
+			[State1#state.active_expr,
+			 State1#state.active_value,
+			 ActiveValue,Value2]),
 	    %% run action when:
 	    %% output is enabled (or just was) and 
 	    %% the target is not value or not a digital value
