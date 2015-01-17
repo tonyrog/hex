@@ -21,27 +21,31 @@
 
 -type variable() :: integer() | atom().
 
+-define(DICT_T, term()).  %% dict:dict()
+-define(ARRAY_T, term()). %% array:array()
+-define(SET_T, term()).   %% sets:set(),
+-define(QUEUE_T, term()). %% queue:queue()
 %%
 -record(core,
 	{
 	  next_var  = 0,
 	  tick = 0,
 	  %% expr: sub expression store Ai|{Op}|{Op,Ai}i|{Op,Ai,Bi}->Ci
-	  expr = dict:new() :: dict:dict(),
+	  expr = dict:new() :: ?DICT_T,
 	  %% rules: rules Ci -> {Op,Ai,Bi}|{Op, Ai}|{Op}|Ai
-	  rules = array:new() :: array:array(),
+	  rules = array:new() :: ?ARRAY_T,
 	  %% refs: Xi -> [C1,..Cn]  rules Cj referring to Xi
-	  refs = dict:new() :: dict:dict(),
+	  refs = dict:new() :: ?DICT_T,
 	  %% value: Xi -> Value
-	  values = dict:new() ::  dict:dict(),
+	  values = dict:new() :: ?DICT_T,
 	  %% prev: Xi -> Value (values in previous tick)
-	  prev = dict:new() ::  dict:dict(),
+	  prev = dict:new() ::  ?DICT_T,
 	  %% tick:  Xi -> Tick
-	  ticks = dict:new() :: dict:dict(),
+	  ticks = dict:new() :: ?DICT_T,
 	  %% queue set of variables already in queue
-	  queue_set = sets:new() :: sets:set(),
+	  queue_set = sets:new() :: ?SET_T,
 	  %% queue of Ci rules to be executed
-	  queue = queue:new() :: queue:queue()
+	  queue = queue:new() :: ?QUEUE_T
 	}).
 
 %%
@@ -426,6 +430,7 @@ eval_enqueue_([],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
     eval_queue(Queue,QSet,Values,Ticks,CurrentTick,Core).
 
 %% push all references not already in queue or already processed
+-ifdef(__not_used__).
 eval_enqueue_r_([Yi|Ys],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
     case sets:is_element(Yi, QSet) of
 	true -> 
@@ -437,6 +442,7 @@ eval_enqueue_r_([Yi|Ys],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
     end;
 eval_enqueue_r_([],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
     eval_queue(Queue,QSet,Values,Ticks,CurrentTick,Core).
+-endif.
 
 refs(Var, Dict) ->    
     case dict:find(Var, Dict) of
