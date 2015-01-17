@@ -62,6 +62,7 @@
 %% note!  a short pulse must be at least 1 ms long, since 
 %% sustain = 0 means that output goes into state_on.
 %%
+-define(DICT_T, term()).  %% until the dust settles
 
 -record(opt, {
 	  value   = 0 :: uint32(),         %% value
@@ -76,7 +77,7 @@
 	  repeat  = 0 :: integer(),        %% pulse repeat count
 	  feedback = 0 :: uint1(),         %% feedback frames as input
 	  transmit = 0 :: uint1(),         %% transmit frames 
-	  other = dict:new() :: dict:dict() %% others value name => value
+	  other = dict:new() :: ?DICT_T    %% others value name => value
 	 }).
 
 -type core_var() :: atom() | integer().
@@ -85,7 +86,7 @@
 	  nodeid  = 0 :: uint32(),         %% id of hex node
 	  chan    = 0 :: uint8(),          %% output number 1..254
 	  ramp_min = 20 :: uint32(),       %% min time quanta in during ramp
-	  targets :: dict:dict(),          %% dictionary of name -> #target {}
+	  targets :: ?DICT_T,          %% dictionary of name -> #target {}
 	  in_config = #opt {} :: #opt{},   %% config values
 	  out_config :: #opt{},            %% mapped config values
 	  counter = 0 :: uint32(),         %% repeat counter
