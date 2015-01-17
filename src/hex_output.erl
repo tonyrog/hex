@@ -65,6 +65,7 @@
 
 -record(opt, {
 	  value   = 0 :: uint32(),         %% value
+	  active  = 0 :: uint32(),         %% active output value
 	  inhibit = 0 :: timeout(),        %% ignore delay
 	  delay   = 0 :: timeout(),        %% activation delay
 	  rampup  = 0 :: timeout(),        %% ramp up time
@@ -78,6 +79,8 @@
 	  other = dict:new() :: dict:dict() %% others value name => value
 	 }).
 
+-type core_var() :: atom() | integer().
+
 -record(state, {
 	  nodeid  = 0 :: uint32(),         %% id of hex node
 	  chan    = 0 :: uint8(),          %% output number 1..254
@@ -88,17 +91,34 @@
 	  counter = 0 :: uint32(),         %% repeat counter
 	  tref    = undefined :: undefined | reference(),
 	  tramp   = undefined :: undefined | reference(),
+	  digital = true,                  %% output signal type
 	  deactivate = false :: boolean(), %% set while deactivate
 	  inhibited  = false :: boolean(), %% disallow activation
-	  active = "value" :: string(),    %% input string
-	  active_expr = 'value' :: term(), %% parse form of active
-	  active_value = 0,                %% last output active value
-	  output_active = "value" :: string(), %% output active signal
-	  output_active_expr = 'value' :: term(),  %% parse output_active
-	  output_active_value = 0,         %% active message sent?
+
+	  enable = "value" :: string(),       %% enable expression
+	  enable_var :: core_var(),             %% enable variable
+
+	  disable = "not value" :: string(),  %% diable expression
+	  disable_var  :: core_var(),          %% disable variable
+
+	  active = "value" :: string(),       %% active expression
+	  active_var :: core_var(),            %% active variable
+
+	  inactive = "not value" :: string(), %% inactive expr
+	  inactive_var :: core_var(),          %% inactive variable
+
+	  output = "value" :: string(),        %% output expression
+	  output_var :: core_var(),            %% output variable
+
+	  enable_value = 0,                    %% last enable value
+	  active_value = 0,                    %% last active value
+
+	  core = hex_core:new() :: term(),
+
 	  env     = [],                    %% enironment for last event
-	  actions = []
+	  actions = []                     %% [{Cond,Value,{App,Flags}}]
 	 }).
+
 
 -define(STATE(Name), io:format("state: ~w\n", [(Name)])).
 -define(verbose(Fmt,As), io:format((Fmt)++"\n", (As))).
@@ -205,21 +225,40 @@ event_spec() ->
 		      "all nodes in the network to monitor the output "
 		      "actions.", []}
 		    ]},
-     {leaf,active,[{type,string,[]},
+     {leaf,enable,[{type,string,[]},
 		   {default,"value", []},
-		   {description, "Expression describing when an output will "
-		    "become active or inactive. The expression is a boolean "
-		    "valued expression that can use all target as variables "
-		    "and the 'normal' logical and comparison connectives",[]}
+		   {description, "Boolean expression describing "
+		    "when an output is enabled. That is, "
+		    "the output is unlatched."}
+		  ]},
+     {leaf,disable,[{type,string,[]},
+		    {default,"not enable", []},
+		    {description, "Boolean expression describing "
+		     "when an output is disabled, that is the output is "
+		     "latched.", []}
 		   ]},
-     {leaf,output_active, [{type,string,[]},
-			   {default,"value", []},
-			   {description, "Expression describing when an "
-			    "activation signal will be sent. The expression is "
-			    "a boolean valued expression that can use all "
-			    "target as variables and the 'normal' logical and "
-			    "comparison connectives",[]}
-			  ]},
+     {leaf,active, [{type,string,[]},
+		     {default,"value", []},
+		     {description, "Boolean expression describing when an "
+		      "activation signal will be sent.",[]}
+		    ]},
+     {leaf,inactive, [{type,string,[]},
+		      {default,"not value", []},
+		      {description, "Boolean expression describing when an "
+		       "deactivation signal will be sent.",[]}
+		     ]},
+     {leaf,output, [{type,string,[]},
+		    {default,"value", []},
+		    {description, "Expression to calculte the output value.",
+		    []}
+		   ]},
+     {leaf,digital, [{type,boolean,[]},
+		     {default,true,[]},
+		     {description, "if 'digital' is true the a digital "
+		      "signal is sent in transmit or feedback otherwise "
+		      "an analog signal is sent.",
+		      []}
+		    ]},
      {list,target,
       [{description, 
 	"Declare the name of the id in the action spec that "
@@ -276,22 +315,36 @@ start_link(Flags, Actions) ->
 %% @end
 %%--------------------------------------------------------------------
 init({Flags,Actions0}) ->
-    Value = #target { name=value, type=clamp, delta=1.0, pos=#opt.value },
+    Value  = #target { name=value, type=clamp, delta=1.0, pos=#opt.value },
     Targets = dict:from_list([{value,Value}]),
     Actions = rewrite_actions(Actions0),
     State0 = #state { actions = Actions,
 		      in_config = #opt {}, 
 		      out_config = #opt {},
 		      targets = Targets },
+    %% fixme run initial eval!
+    %% fixme: send input mapping here?
     case set_options(Flags, State0) of
 	{ok, State1} ->
-	    case eval_expr(State1#state.active_expr, State1) of
+	    Core1 = hex_core:set_value(value, 0, State1#state.core),
+	    Core2 = hex_core:eval(Core1),
+
+	    A = case hex_core:value(State0#state.active_var, Core2) of
+		    0 -> transmit_active(0, State1), 0;
+		    _ -> transmit_active(1, State1), 1
+		end,
+	    transmit_active(A, State1),
+
+	    case hex_core:value(State1#state.enable_var, Core2) of
 		0 ->
-		    {ok, state_off, State1#state { active_value = 0 }};
+		    {ok, state_off, State1#state { enable_value=0,
+						   active_value=A,
+						   core=Core2 }};
 		V ->
-		    transmit_active(1, State1),
-		    {ok, state_on, State1#state { active_value = V }}
-	    end;			 
+		    {ok, state_on, State1#state { enable_value=V,
+						  active_value=A,
+						  core=Core2 }}
+	    end;
 	Error ->
 	    {stop, Error}
     end.
@@ -314,9 +367,9 @@ init({Flags,Actions0}) ->
 state_off(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
+	{0, State1} ->
 	    {next_state, state_off, State1};
-	{_Active,_Value1,State1} ->
+	{1,State1} ->
 	    if State1#state.inhibited ->
 		    ?verbose("inhibited in state_off", []),
 		    {next_state, state_off, State1};
@@ -332,9 +385,9 @@ state_off(_Event, State) ->
 state_on(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
+	{0, State1} ->
 	    do_deactivate(init, State1#state { env = [{source,Src}] });
-	{_Active, _Value1, State1} ->
+	{1, State1} ->
 	    {next_state, state_on, State1}
     end;
 state_on(_Event, S) ->
@@ -359,10 +412,10 @@ state_delay({timeout,TRef,delay}, State) when State#state.tref =:= TRef ->
 state_delay(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
-	    lager:debug("activation cancelled from", [Src]),
+	{0, State1} ->
+	    lager:debug("activation cancelled from ~p", [Src]),
 	    do_off(State1);
-	{_Active,_Value1,State1} ->
+	{1,State1} ->
 	    {next_state, state_delay, State1}
     end;
 state_delay(_Event, State) ->
@@ -375,7 +428,7 @@ state_rampup(init, State) ->
     Time = (State#state.out_config)#opt.rampup,
     if Time > 0 ->
 	    Tm = State#state.ramp_min,
-	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
+	    #target { in_max=A1, in_min=A0 } = value_target(State),
 	    A = (State#state.in_config)#opt.value,
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
@@ -387,11 +440,10 @@ state_rampup(init, State) ->
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
 	    State1 = State#state { tref=TRef,tramp=TRamp },
-	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
+	    State2 = do_analog_value(A,State1),
 	    {next_state, state_rampup, State2};
        true ->
-	    #target { in_max=A } = Trg = value_target(State),
-	    State1 = output_value(?HEX_ANALOG, A, Trg, State),
+	    State1 = do_analog_value(max,State),
 	    state_sustain(init, State1)
     end;
 state_rampup({timeout,TRef,{delta,Td}},State)
@@ -401,13 +453,13 @@ state_rampup({timeout,TRef,{delta,Td}},State)
 	    {next_state, state_rampup, State#state { tref=undefined} };
 	Tr ->
 	    Time = (State#state.out_config)#opt.rampup,
-	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
+	    #target { in_max=A1, in_min=A0 } = value_target(State),
 	    T = (Time - Tr)/Time,
 	    A = trunc((A1-A0)*T + A0),
 	    ?verbose("rampup: T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
-	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
+	    State2 = do_analog_value(A,State1),
 	    {next_state, state_rampup, State2}
     end;
 state_rampup({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
@@ -417,21 +469,20 @@ state_rampup({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
 	    ok
     end,
     State1 = State#state { tramp=undefined, tref=undefined },
-    #target { in_max=A } = Trg = value_target(State),
-    ?verbose("rampup: T=~w A=~w", [1.0, A]),
-    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
+    ?verbose("rampup: T=~w A=~w", [1.0, max]),
+    State2 = do_analog_value(max,State1),
     state_sustain(init, State2);
 
 state_rampup(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
-	    lager:debug("rampup cancelled from", [Src]),
+	{0,State1} ->
+	    lager:debug("rampup cancelled from ~p", [Src]),
 	    gen_fsm:cancel_timer(State1#state.tref),
 	    gen_fsm:cancel_timer(State1#state.tramp),
 	    do_deactivate(Event, State1#state { tref=undefined, 
 						tramp=undefined });
-	{_Active,_Value1,State1} ->
+	{1,State1} ->
 	    {next_state, state_rampup, State1}
     end;
 state_rampup(_Event, S) ->
@@ -444,8 +495,7 @@ state_rampup(_Event, S) ->
 
 state_sustain(init, State) ->
     ?STATE(sustain),
-    Env = [{value,1}|State#state.env],
-    State1 = action(?HEX_DIGITAL, 1, State#state.actions, Env, State),
+    State1 = do_analog_value(max,State),
     Time = (State#state.out_config)#opt.sustain,
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, sustain),
@@ -460,12 +510,12 @@ state_sustain({timeout,TRef,sustain}, State) when State#state.tref =:= TRef ->
 state_sustain(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
-	    lager:debug("sustain cancelled from ~w", [Src]),
+	{0,State1} ->
+	    lager:debug("sustain cancelled from ~p", [Src]),
 	    gen_fsm:cancel_timer(State1#state.tref),
 	    %% was Event
 	    do_deactivate(init, State1#state { tref = undefined });
-	{_Active,_Value1,State1} ->
+	{1,State1} ->
 	    {next_state, state_sustain, State1}
     end;
 state_sustain(_Event, S) ->
@@ -489,14 +539,14 @@ state_deact({timeout,TRef,deact}, State) when State#state.tref =:= TRef ->
 state_deact(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
+	{0, State1} ->
 	    {next_state, state_deact, State1};
-	{Active, _Value1, State1} when Active =/= 0 ->
+	{1, State1} ->
 	    if State1#state.inhibited ->
 		    ?verbose("inhibited in state_deact", []),
 		    {next_state, state_deact, State1};
 	       true ->
-		    lager:debug("deact cancelled from", [Src]),
+		    lager:debug("deact cancelled from ~p", [Src]),
 		    _Remain = gen_fsm:cancel_timer(State#state.tref),
 		    %% FIXME: calculate remain sustain? 
 		    %% or think if this as reactivation?
@@ -514,7 +564,7 @@ state_rampdown(init, State) ->
     Time = (State#state.out_config)#opt.rampdown,
     if Time > 0 ->
 	    Tm = State#state.ramp_min,
-	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
+	    #target { in_max=A1, in_min=A0 } = value_target(State),
 	    A = (State#state.in_config)#opt.value,
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
@@ -526,11 +576,10 @@ state_rampdown(init, State) ->
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
 	    State1 = State#state { tref=TRef,tramp=TRamp },
-	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
+	    State2 = do_analog_value(A,State1),
 	    {next_state, state_rampdown, State2};
        true ->
-	    #target { in_min=A } = Trg = value_target(State),
-	    State1 = output_value(?HEX_ANALOG, A, Trg, State),
+	    State1 = do_analog_value(min,State),
 	    state_wait(init, State1)
     end;
 state_rampdown({timeout,TRef,{delta,Td}},State)
@@ -540,13 +589,13 @@ state_rampdown({timeout,TRef,{delta,Td}},State)
 	    {next_state, state_rampdown, State#state {tref=undefined} };
 	Tr ->
 	    Time = (State#state.out_config)#opt.rampdown,
-	    #target { in_max=A1, in_min=A0 } = Trg = value_target(State),
+	    #target { in_max=A1, in_min=A0 } = value_target(State),
 	    T = (Time-Tr)/Time,
 	    A = trunc((A0-A1)*T + A1),
 	    ?verbose("rampdown: T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
-	    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
+	    State2 = do_analog_value(A,State1),
 	    {next_state, state_rampdown, State2}
     end;
 state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
@@ -556,23 +605,22 @@ state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
 	    ok
     end,
     State1 = State#state { tramp=undefined, tref=undefined },
-    #target { in_min=A } = Trg = value_target(State),
-    ?verbose("rampdown: T=~w A=~w", [1.0, A]),
-    State2 = output_value(?HEX_ANALOG, A, Trg, State1),
+    ?verbose("rampdown: T=~w A=~w", [1.0, min]),
+    State2 = do_analog_value(min,State1),
     state_wait(init, State2);
 state_rampdown(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
-	    lager:debug("deactivate during rampdown from", [Src]),
+	{0, State1} ->
+	    lager:debug("deactivate during rampdown from ~p", [Src]),
 	    %% mark for deactivation - when ramp is done
 	    {next_state, state_rampdown, State1#state { deactivate=true }};
-	{_Active,_Value1,State1} ->
+	{1, State1} ->
 	    if State1#state.inhibited ->
 		    ?verbose("inhibited in state_rampdown", []),
 		    {next_state, state_rampdown, State1};
 	       true ->
-		    lager:debug("rampdown cancelled from", [Src]),
+		    lager:debug("rampdown cancelled from ~p", [Src]),
 		    _Remain = gen_fsm:cancel_timer(State1#state.tref),
 		    state_rampup(init, State1#state { tref = undefined,
 						      deactivate=false })
@@ -584,11 +632,9 @@ state_rampdown(_Event, S) ->
 
 state_wait(init, State) ->
     ?STATE(wait),
-    Env = [{value,0}, State#state.env],
-    State1 = action(?HEX_DIGITAL, 0, State#state.actions, Env, State),
+    State1 = do_analog_value(min,State),
     WaitTime = (State1#state.out_config)#opt.wait,
-    if State1#state.deactivate =:= true;
-       State1#state.counter =:= 0 ->
+    if State1#state.enable_value =:= 0, State1#state.counter =:= 0 ->
 	    do_off(State1);
        true ->
 	    %% context switch even if WaitTime = 0!
@@ -610,10 +656,10 @@ state_wait({timeout,TRef,wait}, State) when State#state.tref =:= TRef ->
 state_wait(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
     case do_input(Event, State) of
-	{0, _Value1, State1} ->
-	    lager:debug("deactivate during wait from", [Src]),
+	{0, State1} ->
+	    lager:debug("deactivate during wait from ~p", [Src]),
 	    do_off(State1);
-	{_Active,_Value1,State1} ->
+	{1, State1} ->
 	    {next_state, state_wait, State1}
     end;
 state_wait(_Event, State) ->
@@ -622,7 +668,6 @@ state_wait(_Event, State) ->
 
 do_activate(Event, State) ->
     ?verbose("DO_ACTIVATE",[]),
-    transmit_active(1, State),
     OConfig = State#state.out_config,
     Inhibited = if OConfig#opt.inhibit > 0 -> 
 			%% handle in handle_info instead of state since,
@@ -646,8 +691,7 @@ do_reactivate(_Event, State) ->
 
 do_deactivate(_Event, State) ->
     ?verbose("DO_DEACTIVATE",[]),
-    transmit_active(0, State),
-    state_deact(init, State#state { deactivate=true }).
+    state_deact(init, State).
 
 do_off(State) ->
     ?verbose("DO_OFF",[]),
@@ -779,16 +823,74 @@ set_options([Opt|Options], State) ->
 		    {error, {badarg,Opt}}
 	    end;
 
-	{active,Value} when is_list(Value) ->
-	    try hex:parse_bool_expr(Value) of
-		Expr -> 
-		    State1 = State#state { active = Value,
-					   active_expr = Expr },
+	{enable,Value} when is_list(Value) ->
+	    try hex_core:parse(Value) of
+		Expr ->
+		    {Var,Core} = hex_core:add_expr(Expr,State#state.core),
+		    State1 = State#state { enable = Value,
+					   enable_var = Var,
+					   core = Core },
 		    set_options(Options, State1)
 	    catch
 		error:_Reason ->
 		    {error, {badarg,Opt}}
 	    end;
+
+	{disable,Value} when is_list(Value) ->
+	    try hex_core:parse(Value) of
+		Expr ->
+		    {Var,Core} = hex_core:add_expr(Expr,State#state.core),
+		    State1 = State#state { disable = Value,
+					   disable_var= Var,
+					   core = Core },
+		    set_options(Options, State1)
+	    catch
+		error:_Reason ->
+		    {error, {badarg,Opt}}
+	    end;
+
+	{active,Value} when is_list(Value) ->
+	    try hex_core:parse(Value) of
+		Expr ->
+		    {Var,Core} = hex_core:add_expr(Expr,State#state.core),
+		    State1 = State#state { active = Value,
+					   active_var = Var,
+					   core = Core },
+		    set_options(Options, State1)
+	    catch
+		error:_Reason ->
+		    {error, {badarg,Opt}}
+	    end;
+
+	{inactive,Value} when is_list(Value) ->
+	    try hex_core:parse(Value) of
+		Expr ->
+		    {Var,Core} = hex_core:add_expr(Expr,State#state.core),
+		    State1 = State#state { inactive = Value,
+					   inactive_var = Var,
+					   core = Core },
+		    set_options(Options, State1)
+	    catch
+		error:_Reason ->
+		    {error, {badarg,Opt}}
+	    end;
+
+	{output,Value} when is_list(Value) ->
+	    try hex_core:parse(Value) of
+		Expr ->
+		    {Var,Core} = hex_core:add_expr(Expr,State#state.core),
+		    State1 = State#state { output = Value,
+					   output_var = Var,
+					   core = Core },
+		    set_options(Options, State1)
+	    catch
+		error:_Reason ->
+		    {error, {badarg,Opt}}
+	    end;
+
+	{digital,Value} when is_boolean(Value) ->
+	    State1 = State#state { digital = Value },
+	    set_options(Options, State1);
 
 	{chan,Value} ->
 	    if ?is_uint8(Value) ->
@@ -918,8 +1020,8 @@ value_target(State) ->
 target_in_value(Target, State) ->
     target_value(Target, State#state.in_config).
 
-target_out_value(Target, State) ->
-    target_value(Target, State#state.out_config).
+%% target_out_value(Target, State) ->
+%%    target_value(Target, State#state.out_config).
     
 target_value(Target, Config) ->
     case Target#target.pos of
@@ -931,6 +1033,7 @@ target_value(Target, Config) ->
 	Pos ->
 	    element(Pos, Config)
     end.
+
 
 do_input({Name,{digital,Value,Src}}, State) ->
     do_input(?HEX_DIGITAL,Name, Value, 0, Src, State);
@@ -948,46 +1051,93 @@ do_input({Name,{?HEX_OUTPUT_ACTIVE,Value,Src}}, State) ->
     do_input(?HEX_DIGITAL,Name, Value, 0, Src, State);
 do_input(_Event, State) ->
     lager:debug("ignore event ~p", [_Event]),
-    {State#state.active_value, 0, State}.
+    {State#state.enable_value, State}.
 
-do_input(Type, Name, Value, Delta, Src, State) ->
+do_analog_value(min, State) ->
+    #target { in_min=A } = value_target(State),
+    do_analog_value(A, State);
+do_analog_value(max, State) ->
+    #target { in_max=A } = value_target(State),
+    do_analog_value(A, State);
+do_analog_value(A, State) when is_integer(A) -> %% allow number soon?
+    %% FIXME: how to handle enable here?
+    {_Enable,State1} = do_input(?HEX_ANALOG, value, A, 0, internal, State),
+    State1.
+
+%%
+%% feed input into target array
+%% and feed input as long as there input
+%% each target trigger expression that reference
+%% the vaiable onto a queue of things to evaluate.
+%%
+%% update Target' data with the new input
+%% run eval with Target and Target' as input
+%%
+%%
+
+do_input(_Type, Name, Value, Delta, Src, State) ->
     case dict:find(Name, State#state.targets) of
 	error ->
 	    lager:error("target ~s not found", [Name]),
-	    {State#state.active_value, 0, State};
+	    {State#state.enable_value, 0, State};
 	{ok,Target} ->
 	    Value1 = if Delta =/= 0 ->
-			     Value + Delta + target_in_value(Target, State);
+			     Value + target_in_value(Target, State);
 			true ->
 			     Value
 		     end,
+	    %% merge targets and core vars?
+	    %% target could be declared as {x, "clamp(x)"}
+	    %% or {y, "trunc(2*y + 1), even {z,"map(z,0,1,10,100)"}
 	    {Value2,State1} = set_value(Target, Value1, Delta, State),
-	    ActiveValue = eval_expr(State1#state.active_expr, State1),
-	    lager:debug("do_input: expr=~w,old_active=~w,active=~w,value=~w", 
-			[State1#state.active_expr,
-			 State1#state.active_value,
-			 ActiveValue,Value2]),
-	    %% run action when:
-	    %% output is enabled (or just was) and 
-	    %% the target is not value or not a digital value
-	    State2 = 
-		if ((ActiveValue =/= 0) orelse 
-		    (State1#state.active_value =/= 0)) andalso
-		   ((Name =/= value) orelse (Type =/= ?HEX_DIGITAL)) ->
-			Env = [{Name,Value2}, {source,Src}],
-			action(Type,Value2,State#state.actions,Env,State1);
-		   true ->
-			State1
-		end,
-	    {ActiveValue, Value2, State2#state { active_value = ActiveValue }}
+	    Core1 = hex_core:set_value(Name, Value1+Delta, State1#state.core),
+	    Core2 = hex_core:eval(Core1),
+	    Active =
+	    case State#state.active_value of
+		0 ->
+		    case hex_core:value(State#state.active_var, Core2) of
+			0 -> 0;
+			_ -> transmit_active(1, State), 1
+		    end;
+		1 ->
+		    case hex_core:value(State#state.active_var, Core2) of
+			0 -> transmit_active(0, State), 0;
+			_ -> 1
+		    end
+	    end,
+	    Output = hex_core:value(State#state.output_var,Core2),
+	    Env = [{Name,Value2},{output,Output},{source,Src}],
+	    {Enabled,State2} =
+	    case State#state.enable_value of
+		0 ->
+		    case hex_core:value(State#state.enable_var, Core2) of
+			0 ->
+			    {0,State1};
+			_ ->
+			    feedback(Output, State),
+			    {1,action(Env,State1)}
+		    end;
+		1 ->
+		    case hex_core:value(State#state.disable_var, Core2) of
+			0 ->
+			    feedback(Output, State),
+			    {0,action(Env,State)};
+			_ ->
+			    feedback(Output, State),
+			    {1,action(Env,State)}
+		    end
+	    end,
+	    {Enabled, State2#state { enable_value = Enabled,
+				     active_value = Active,
+				     core = Core2 }}
     end.
 
 
 set_value(Target, X, Delta, State) ->
     Xi = constrain_in_value(X + Delta, Target),
     Xo = map_value(Xi, Target),
-    ?verbose("set_value target:~s delta:~w in:~w, constrained:~w, mapped:~w",
-	     [Target#target.name,Delta,X,Xi,Xo]),
+    lager:debug("set_value target:~s delta:~w in:~w, constrained:~w, mapped:~w",
+		[Target#target.name,Delta,X,Xi,Xo]),
     Pos = Target#target.pos,
     IConfig = State#state.in_config,
     OConfig = State#state.out_config,
@@ -1016,15 +1166,15 @@ clamp_in_value(X, #target { in_min=X0, in_max=X1 }) ->
        true -> min(X0, max(X1, X))
     end.
 
-constrain_out_value(X, Target) when Target#target.type =:= wrap ->
-    wrap_out_value(X, Target);
-constrain_out_value(X, Target) when Target#target.type =:= clamp ->
-    clamp_out_value(X, Target).
+%% constrain_out_value(X, Target) when Target#target.type =:= wrap ->
+%%     wrap_out_value(X, Target);
+%% constrain_out_value(X, Target) when Target#target.type =:= clamp ->
+%%     clamp_out_value(X, Target).
 
-clamp_out_value(Y, #target { out_min=Y0, out_max=Y1 }) ->
-    if Y1 >= Y0 -> min(Y1, max(Y0, Y));
-       true -> min(Y0, max(Y1, Y))
-    end.
+%% clamp_out_value(Y, #target { out_min=Y0, out_max=Y1 }) ->
+%%    if Y1 >= Y0 -> min(Y1, max(Y0, Y));
+%%       true -> min(Y0, max(Y1, Y))
+%%    end.
 
 wrap_in_value(X, #target { in_min=X0, in_max=X1 }) ->
     if X1 >= X0 ->
@@ -1033,12 +1183,12 @@ wrap_in_value(X, #target { in_min=X0, in_max=X1 }) ->
 	    mod((X - X1),(X0 - X1 + 1)) + X1
     end.
 
-wrap_out_value(Y, #target { out_min=Y0, out_max=Y1 }) ->
-    if Y1 >= Y0 ->
-	    mod((Y - Y0),(Y1 - Y0 + 1)) + Y0;
-       Y1 < Y0 ->
-	    mod((Y - Y1),(Y0 - Y1 + 1)) + Y1
-    end.
+%% wrap_out_value(Y, #target { out_min=Y0, out_max=Y1 }) ->
+%%    if Y1 >= Y0 ->
+%%	    mod((Y - Y0),(Y1 - Y0 + 1)) + Y0;
+%%       Y1 < Y0 ->
+%%	    mod((Y - Y1),(Y0 - Y1 + 1)) + Y1
+%%    end.
 
 mod(A,N) ->
     A1 = A rem N,
@@ -1051,6 +1201,7 @@ mod(A,N) ->
 target_pos(K) ->
     case K of
 	value     -> #opt.value;
+	active    -> #opt.active;
 	inhibit   -> #opt.inhibit;
 	delay     -> #opt.delay;
 	rampup    -> #opt.rampup;
@@ -1141,18 +1292,14 @@ transmit_signal(Signal, Env, State) when
 transmit_signal(_Signal, _Env, _State) ->
     ok.
 
-
-%% generate an action value and store value
-output_value(_Type, Vin, Target, State) ->
-    Vout = map_value(Vin, Target),
-    %% call action matching !
-    IConfig = State#state.in_config,
-    OConfig = State#state.out_config,
-    State#state {  in_config = IConfig#opt { value = Vin },
-		   out_config = OConfig#opt { value = Vout }}.
-
 %% output "virtual" feedback
-feedback(Type,Value, State) ->
+feedback(Value0, State) ->
+    {Type,Value} = 
+	if State#state.digital ->
+		{?HEX_DIGITAL, if Value0>0 -> 1; true -> 0 end};
+	   true ->
+		{?HEX_ANALOG, Value0}
+	end,
     Signal = #hex_signal { id=make_self(State#state.nodeid),
 			   chan=State#state.chan,
 			   type=Type,
@@ -1162,23 +1309,22 @@ feedback(Type,Value, State) ->
     feedback_signal(Signal, Env, State),
     transmit_signal(Signal, Env, State).
 
-action(Type, Value, Action, Env, S) ->
-    lager:debug("action type=~.16B, value=~w, env=~w\n", [Type,Value,Env]),
-    feedback(Type, Value, S),
-    action_list(Value, Action, Env, S).
-
-action_list(Value, [{Cond,Action} | Actions], Env, S) ->
-    case eval_expr(Cond, S) of
+action(Env, State) ->
+    lager:debug("action env=~w\n", [alue,Env]),
+    action_list(State#state.actions, Env, State).
+    
+action_list([{Cond,Action} | Actions], Env, State) ->
+    case hex_core:value(Cond, State#state.core) of
 	0 ->
 	    lager:debug("eval ~p = 0\n", [Cond]),
-	    action_list(Value, Actions, Env, S);
-	_Val ->
-	    lager:debug("eval ~p = ~p\n", [Cond,_Val]),
+	    action_list(Actions, Env, State);
+	_CondVal ->
+	    lager:debug("eval ~p = ~p\n", [Cond,_CondVal]),
 	    execute(Action, Env),
-	    action_list(Value, Actions, Env, S)
+	    action_list(Actions, Env, State)
     end;
-action_list(_Value, [], _Env, S) ->
-    S.
+action_list([], _Env, State) ->
+    State.
 
 execute({App, AppFlags}, Env) ->
     try App:output(AppFlags, Env) of
@@ -1191,29 +1337,15 @@ execute({App, AppFlags}, Env) ->
 	    {error,Reason}
     end.
 
-eval_expr(Expr, S) ->
-    hex:eval_expr(Expr, fun(V) -> lookup_var(V, S) end).
+%% util to handle some variants on actions
+%% fixme: only allow one form!
 
-lookup_var(Name, S) ->
-    case dict:find(Name, S#state.targets) of
-	error ->
-	    lager:error("target ~s not found", [Name]),
-	    0;
-	{ok,Target} ->
-	    OConfig = S#state.out_config,
-	    case Target#target.pos of
-		#opt.other ->
-		    dict:fetch(Name, OConfig#opt.other);
-		Pos ->
-		    element(Pos, OConfig)
-	    end
-    end.
-
-rewrite_actions({App,Flags}) -> [{1, {App,Flags}}];
+rewrite_actions({App,Flags}) -> 
+    [{{'!=',output,{const,0}},{App,Flags}}];
 rewrite_actions([{Expr,{App,Flags}} | Actions]) ->
-    Expr1 = if Expr =:= [] -> 1;
-	       is_integer(Expr) -> {'==',value,Expr};
-	       is_list(Expr) -> hex:parse_bool_expr(Expr)
+    Expr1 = if Expr =:= [] -> {const,1};
+	       is_integer(Expr) -> {'==',value,{const,Expr}};
+	       is_list(Expr) -> hex_core:parse(Expr)
 	    end,
     [{Expr1,{App,Flags}} | rewrite_actions(Actions)];
 rewrite_actions([]) ->

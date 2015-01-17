@@ -29,8 +29,6 @@
 -export([text_expand/2]).
 -export([pp_yang/1]).
 -export([save_yang/2]).
--export([parse_bool_expr/1]).
--export([eval_expr/2]).
 
 -include("../include/hex.hrl").
 
@@ -90,7 +88,9 @@ join(Name) when is_atom(Name) ->
 
 %%
 %% Utility to exand environment "variables" in unicode text
-%% variables are written as ${var} wher var is a encoded atom
+%% variables are written as ${var} where var is a encoded atom
+%% operating system enviroment is accessed through $(VAR)
+%% and application library dir $/app/
 %%
 text_expand(Text, Env) when is_list(Text) ->
     %% assume unicode character list!
@@ -100,7 +100,11 @@ text_expand(Text, Env) when is_binary(Text) ->
     text_expand_(unicode:characters_to_list(Text), [], Env).
 
 text_expand_([$$,${|Text], Acc, Env) ->
-    text_expand_collect_(Text, [], [${,$$], Acc, Env);
+    text_expand_collect_(Text, [], [${,$$], env, Acc, Env);
+text_expand_([$$,$(|Text], Acc, Env) ->
+    text_expand_collect_(Text, [], [$(,$$], shell, Acc, Env);
+text_expand_([$$,$/|Text], Acc, Env) ->
+    text_expand_collect_(Text, [], [$/,$$], lib, Acc, Env);
 text_expand_([$\\,C|Text], Acc, Env) ->
     text_expand_(Text, [C|Acc], Env);
 text_expand_([C|Text], Acc, Env) ->
@@ -108,7 +112,30 @@ text_expand_([C|Text], Acc, Env) ->
 text_expand_([], Acc, _Env) ->
     lists:reverse(Acc).
 
-text_expand_collect_([$}|Text], Var, _Pre, Acc, Env) ->
+
+text_expand_collect_([$)|Text], Var, _Pre, shell, Acc, Env) ->
+    case os:getenv(rev_variable(Var)) of
+	false -> 
+	    text_expand_(Text, Acc, Env);
+	Value ->
+	    Acc1 = lists:reverse(Value, Acc),
+	    text_expand_(Text, Acc1, Env)
+    end;
+text_expand_collect_([$/|Text], Var, _Pre, lib, Acc, Env) ->
+    try erlang:list_to_existing_atom(rev_variable(Var)) of
+	App ->
+	    case code:lib_dir(App) of
+		{error,_} -> 
+		    text_expand_(Text, Acc, Env);
+		Value ->
+		    Acc1 = lists:reverse(Value, Acc),
+		    text_expand_(Text, Acc1, Env)
+	    end
+    catch
+	error:_ ->
+	    text_expand_(Text, Acc, Env)
+    end;
+text_expand_collect_([$}|Text], Var, _Pre, env, Acc, Env) ->
     try erlang:list_to_existing_atom(rev_variable(Var)) of
 	Key ->
 	    case lists:keyfind(Key, 1, Env) of
@@ -123,18 +150,18 @@ text_expand_collect_([$}|Text], Var, _Pre, Acc, Env) ->
 	error:_ ->
 	    text_expand_(Text, Acc, Env)
     end;
-text_expand_collect_([C|Text], Var, Pre, Acc, Env) ->
+text_expand_collect_([C|Text], Var, Pre, Shell, Acc, Env) ->
     if C >= $a, C =< $z;
        C >= $A, C =< $Z;
        C >= $0, C =< $9;
        C == $_; C == $@;
        C == $\s; C == $\t -> %% space and tab allowed in begining and end
-	    text_expand_collect_(Text, [C|Var], Pre, Acc, Env);
+	    text_expand_collect_(Text, [C|Var], Pre, Shell, Acc, Env);
        true ->
 	    %% char not allowed in variable named
 	    text_expand_(Text,  [C | Var ++ Pre ++ Acc], Env)
     end;
-text_expand_collect_([], Var, Pre, Acc, Env) ->
+text_expand_collect_([], Var, Pre, _Shell, Acc, Env) ->
     text_expand_([],  Var ++ Pre ++ Acc, Env).
 
 rev_variable(Var) ->
@@ -502,133 +529,4 @@ pp_yang_range_elem(Value) ->io_lib:format("~w", [Value]).
 pp_yang_range([E]) -> pp_yang_range_elem(E);
 pp_yang_range([E|Es]) -> [pp_yang_range_elem(E),"|",pp_yang_range(Es)];
 pp_yang_range([]) -> "".
-
-%%
-%% Parse a erlang style boolean expression (uses >= and =< )
-%% (fixme?)
-%%
-
-parse_bool_expr(String) when is_list(String) ->
-    {ok,Ts,_} = erl_scan:string(String),
-    {ok,[Expr]} = erl_parse:parse_exprs(Ts ++ [{dot,1}]),
-    rewrite_expr(Expr).
-
-rewrite_expr({atom,_,true})  -> 1;
-rewrite_expr({atom,_,false}) -> 0;
-rewrite_expr({atom,_,Target}) when is_atom(Target) -> Target;
-rewrite_expr({var,_,Target}) when is_atom(Target) -> Target;
-rewrite_expr({integer,_,Value}) -> Value;
-
-rewrite_expr({op,_,'and',A,B}) -> {'and',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'or',A,B}) ->  {'or',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'xor',A,B}) ->  {'xor',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'not',A}) ->  {'not',rewrite_expr(A)};
-
-%% arithmetical
-rewrite_expr({op,_,'+',A,B}) -> {'+',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'-',A,B}) ->  {'-',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'*',A,B}) ->  {'*',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'div',A,B}) -> {'div',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'rem',A,B}) -> {'rem',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'-',A}) ->  {'-',rewrite_expr(A)};
-
-%% comparison
-rewrite_expr({op,_,'==',A,B}) -> {'==',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'/=',A,B}) -> {'/=',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'=<',A,B}) -> {'=<',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'<',A,B}) -> {'<',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'>=',A,B}) -> {'>=',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'>',A,B}) -> {'>',rewrite_expr(A),rewrite_expr(B)}.
-
-%%
-%% Evaluate expression
-%%
-eval_expr(Value, _Lookup) when is_integer(Value) -> Value;
-eval_expr(Name, Lookup) when is_atom(Name) -> Lookup(Name);
-%% logical
-eval_expr({'and',A,B},Fun) -> 
-    case eval_expr(A,Fun) of
-	0 -> 0;
-	_ -> eval_expr(B,Fun)
-    end;
-eval_expr({'or',A,B},Fun) ->
-    case eval_expr(A,Fun) of
-	0 -> eval_expr(B,Fun);
-	V -> V
-    end;
-eval_expr({'xor',A,B},Fun) ->
-    case eval_expr(A,Fun) of
-	0 -> 
-	    case eval_expr(B,Fun) of
-		0 -> 1;
-		V -> V
-	    end;
-	_ -> 
-	    case eval_expr(B,Fun) of
-		0 -> 1;
-		W -> W
-	    end
-    end;
-eval_expr({'not',A},Fun) ->
-    case eval_expr(A,Fun) of
-	0 -> 1;
-	_ -> 0
-    end;
-%% arithmetical
-eval_expr({'+',A,B},Fun) -> 
-    eval_expr(A,Fun)+eval_expr(B,Fun);
-eval_expr({'-',A,B},Fun) -> 
-    eval_expr(A,Fun)-eval_expr(B,Fun);
-eval_expr({'*',A,B},Fun) -> 
-    eval_expr(A,Fun)*eval_expr(B,Fun);
-eval_expr({'div',A,B},Fun) ->
-    case eval_expr(B,Fun) of
-	0 -> 
-	    lager:error("division by zero", []),
-	    0;
-	D ->
-	    eval_expr(A,Fun) div D
-    end;
-eval_expr({'rem',A,B},Fun) -> 
-    case eval_expr(B,Fun) of
-	0 -> 
-	    lager:error("division by zero", []),
-	    0;
-	D ->
-	    eval_expr(A,Fun) rem D
-    end;
-eval_expr({'-',A},Fun) -> 
-    -eval_expr(A,Fun);
-
-%% comparision
-eval_expr({'==',A,B},Fun) -> 
-    case eval_expr(A,Fun) =:= eval_expr(B,Fun) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'/=',A,B},Fun) -> 
-    case eval_expr(A,Fun) =/= eval_expr(B,Fun) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'=<',A,B},Fun) -> 
-    case eval_expr(A,Fun) =< eval_expr(B,Fun) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'<',A,B},Fun) -> 
-    case eval_expr(A,Fun) < eval_expr(B,Fun) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'>=',A,B},Fun) -> 
-    case eval_expr(A,Fun) >= eval_expr(B,Fun) of
-	true -> 1;
-	false -> 0
-    end;
-eval_expr({'>',A,B},Fun) -> 
-    case eval_expr(A,Fun) > eval_expr(B,Fun) of
-	true -> 1;
-	false -> 0
-    end.
 

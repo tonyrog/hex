@@ -308,11 +308,13 @@ validate_action_expression(Expr) ->
     if Expr =:= "" -> ok;
        is_integer(Expr) -> ok;
        is_list(Expr) -> 
-	    try hex:parse_bool_expr(Expr) of
+	    try hex_core:parse(Expr) of
 		_ -> ok
 	    catch
 		error:_ -> {error, expression_synax_error}
-	    end
+	    end;
+       true ->
+	    {error, {bad_expr, Expr}}
     end.
 
 config_spec() ->

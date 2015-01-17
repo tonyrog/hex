@@ -26,9 +26,9 @@
 	{
 	  next_var  = 0,
 	  tick = 0,
-	  %% expr: sub expression store Var->Ci|{Op,Ai}->Ci|{Op,Ai,Bi}->Ci
+	  %% expr: sub expression store Ai|{Op}|{Op,Ai}i|{Op,Ai,Bi}->Ci
 	  expr = dict:new() :: dict:dict(),
-	  %% rules: rules Ci -> {Op,Ai,Bi},  Ci -> {Op, Ai}
+	  %% rules: rules Ci -> {Op,Ai,Bi}|{Op, Ai}|{Op}|Ai
 	  rules = array:new() :: array:array(),
 	  %% refs: Xi -> [C1,..Cn]  rules Cj referring to Xi
 	  refs = dict:new() :: dict:dict(),
@@ -276,6 +276,8 @@ add_refs(_Ci, _Expr, Refs) ->
 %% get current value
 -spec value(Var::variable(), Core::#core{}) -> integer().
 
+value({const,Val}, _Core) -> 
+    Val;
 value(Var, Core) when is_atom(Var), is_record(Core, core) ->
     case dict:find(Var, Core#core.expr) of
 	error -> 0;

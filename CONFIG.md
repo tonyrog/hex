@@ -87,7 +87,12 @@ Specification of HomeExchange (Hex) configuration file
 		{repeat, integer()} | %% -1 = pulse forever
 		{feedback, boolean()} |
 		{transmit, boolean()} |
-		{active, active_expr()} |  %% active expressio (default = "value")
+		{digital, boolean()} | %% output digital signal otherwise analog
+		{enable, bool_expr()} |   %% (default="value")
+		{disable, bool_expr()} |  %% (default="not enable")
+		{activate, bool_expr()} | %% (default="value")
+		{deactivate, bool_expr()} | %% (default="not activate")
+		{output, expr()} | %% output expression (default ="value")
         {target, target_spec()}
 
     target_spec() :: [target_flag()]
@@ -104,9 +109,12 @@ Specification of HomeExchange (Hex) configuration file
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.
     plugin_output_flag() :: atom() | {atom(),term()}.
 
-	cond() :: [] | lexpr().  %% [] == true
+	cond() :: [] | lexpr().  %% [] == true, default = "!value"
 
-    active_expr() :: string() or expr()
+	active_expr() :: string() or expr().
+	bool_expr() :: string() | lexpr().
+	expr() :: lexpr().
+	
 	lexpr() ::
 		aexpr() |
 		rexpr() |
@@ -122,6 +130,8 @@ Specification of HomeExchange (Hex) configuration file
 		aexpr() == aexpr() |
 		aexpr() /= aexpr().
     aexpr() ::
+	    atom() | %% target variable
+		
 		integer() |
 		true | %% = 1
 		false |  %% = 0
