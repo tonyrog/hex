@@ -284,17 +284,38 @@ validate_app_flags(App, Dir, Flags) ->
 	Error ->
 	    Error
     end.
-
+%%
+%% Action now look like
+%% "" | []   same as "true" => 1
+%% Integer   same as "value == Integer"
+%% String    parse as boolean expression
+%%
 validate_actions({App,Flags}) ->
     validate_event(App, out, Flags);
-validate_actions([{_Pattern,{App,Flags}} | Actions]) ->
-    %% fixme: validate pattern!
-    case validate_event(App, out, Flags) of
-	ok -> validate_actions(Actions);
+validate_actions([{Expr,{App,Flags}} | Actions]) ->
+    case validate_action_expression(Expr) of
+	ok ->
+	    case validate_event(App, out, Flags) of
+		ok -> validate_actions(Actions);
+		Error -> Error
+	    end;
 	Error -> Error
     end;
 validate_actions([]) ->
     ok.
+
+validate_action_expression(Expr) ->
+    if Expr =:= "" -> ok;
+       is_integer(Expr) -> ok;
+       is_list(Expr) -> 
+	    try hex_core:parse(Expr) of
+		_ -> ok
+	    catch
+		error:_ -> {error, expression_synax_error}
+	    end;
+       true ->
+	    {error, {bad_expr, Expr}}
+    end.
 
 config_spec() ->
     {choice, config,
@@ -343,7 +364,7 @@ transmit_spec() ->
 action_spec() ->
     {list, actions,
      [{key, pattern, []},
-      {leaf, pattern, [{type, 'hex:pattern', []}]},
+      {leaf, expr, [{type, string, []}]}, %% condition
       {leaf, name, [{type,string,[]},{mandatory, true, []}]},
       {anyxml, flags, [{description,"Application specific action flags",[]}]}
      ]}.

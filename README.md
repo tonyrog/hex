@@ -20,12 +20,12 @@ Current plugins
 - hex_piface - [https://github.com/tonyrog/hex_piface](https://github.com/tonyrog/hex_piface)
 - hex_wse - [https://github.com/tonyrog/hex_wse](https://github.com/tonyrog/hex_wse)
 - hex_epx - [https://github.com/tonyrog/hex_epx](https://github.com/tonyrog/hex_epx)
+- hex_script - [https://github.com/tonyrog/hex_script](https://github.com/tonyrog/hex_script)
 
 In progress and planned plugins
 
 - hex_gps
 - hex_pop
 - hex_imap
-- hex_script
 - hex_adc
 - hex_exoport

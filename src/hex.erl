@@ -88,7 +88,9 @@ join(Name) when is_atom(Name) ->
 
 %%
 %% Utility to exand environment "variables" in unicode text
-%% variables are written as ${var} wher var is a encoded atom
+%% variables are written as ${var} where var is a encoded atom
+%% operating system enviroment is accessed through $(VAR)
+%% and application library dir $/app/
 %%
 text_expand(Text, Env) when is_list(Text) ->
     %% assume unicode character list!
@@ -98,7 +100,11 @@ text_expand(Text, Env) when is_binary(Text) ->
     text_expand_(unicode:characters_to_list(Text), [], Env).
 
 text_expand_([$$,${|Text], Acc, Env) ->
-    text_expand_collect_(Text, [], [${,$$], Acc, Env);
+    text_expand_collect_(Text, [], [${,$$], env, Acc, Env);
+text_expand_([$$,$(|Text], Acc, Env) ->
+    text_expand_collect_(Text, [], [$(,$$], shell, Acc, Env);
+text_expand_([$$,$/|Text], Acc, Env) ->
+    text_expand_collect_(Text, [], [$/,$$], lib, Acc, Env);
 text_expand_([$\\,C|Text], Acc, Env) ->
     text_expand_(Text, [C|Acc], Env);
 text_expand_([C|Text], Acc, Env) ->
@@ -106,7 +112,30 @@ text_expand_([C|Text], Acc, Env) ->
 text_expand_([], Acc, _Env) ->
     lists:reverse(Acc).
 
-text_expand_collect_([$}|Text], Var, _Pre, Acc, Env) ->
+
+text_expand_collect_([$)|Text], Var, _Pre, shell, Acc, Env) ->
+    case os:getenv(rev_variable(Var)) of
+	false -> 
+	    text_expand_(Text, Acc, Env);
+	Value ->
+	    Acc1 = lists:reverse(Value, Acc),
+	    text_expand_(Text, Acc1, Env)
+    end;
+text_expand_collect_([$/|Text], Var, _Pre, lib, Acc, Env) ->
+    try erlang:list_to_existing_atom(rev_variable(Var)) of
+	App ->
+	    case code:lib_dir(App) of
+		{error,_} -> 
+		    text_expand_(Text, Acc, Env);
+		Value ->
+		    Acc1 = lists:reverse(Value, Acc),
+		    text_expand_(Text, Acc1, Env)
+	    end
+    catch
+	error:_ ->
+	    text_expand_(Text, Acc, Env)
+    end;
+text_expand_collect_([$}|Text], Var, _Pre, env, Acc, Env) ->
     try erlang:list_to_existing_atom(rev_variable(Var)) of
 	Key ->
 	    case lists:keyfind(Key, 1, Env) of
@@ -121,18 +150,18 @@ text_expand_collect_([$}|Text], Var, _Pre, Acc, Env) ->
 	error:_ ->
 	    text_expand_(Text, Acc, Env)
     end;
-text_expand_collect_([C|Text], Var, Pre, Acc, Env) ->
+text_expand_collect_([C|Text], Var, Pre, Shell, Acc, Env) ->
     if C >= $a, C =< $z;
        C >= $A, C =< $Z;
        C >= $0, C =< $9;
        C == $_; C == $@;
        C == $\s; C == $\t -> %% space and tab allowed in begining and end
-	    text_expand_collect_(Text, [C|Var], Pre, Acc, Env);
+	    text_expand_collect_(Text, [C|Var], Pre, Shell, Acc, Env);
        true ->
 	    %% char not allowed in variable named
 	    text_expand_(Text,  [C | Var ++ Pre ++ Acc], Env)
     end;
-text_expand_collect_([], Var, Pre, Acc, Env) ->
+text_expand_collect_([], Var, Pre, _Shell, Acc, Env) ->
     text_expand_([],  Var ++ Pre ++ Acc, Env).
 
 rev_variable(Var) ->
@@ -310,19 +339,18 @@ validate_value(Value, enumeration, Tas) ->
     if is_atom(Value) ->
 	    validate_enum(Value, Tas);
        true ->
-	    Es = lists:foldr(fun({enum,E,_},Acc) -> [E|Acc];
-				(_,Acc) -> Acc
-			     end, [], Tas),
+	    Es = [E || {enum,E,_} <- Tas],
 	    {enumeration, Es}
     end;
 validate_value(Value, bits, Tas) ->
-    if is_atom(Value) ->
-	    validate_bit(Value, Tas);
-       true ->
-	    Es = lists:foldr(fun({bit,E,_},Acc) -> [E|Acc];
-				(_,Acc) -> Acc
-			     end, [], Tas),
-	    {bits, Es}
+    if is_atom(Value) -> validate_bit(Value, Tas);
+       Value =:= [] -> ok;
+       is_list(Value) ->
+	    case lists:all(fun(V) -> validate_bit(V, Tas) =:= ok end, Value) of
+		true -> ok;
+		false -> error_bits(Tas)
+	    end;
+       true -> error_bits(Tas)
     end;
 validate_value(Value, string, Tas) ->
     case is_atom(Value) orelse is_string(Value) of
@@ -440,6 +468,9 @@ validate_bit(Value, [_|List]) ->
 validate_bit(_Value, []) -> 
     badarg.
 
+error_bits(Tas) ->
+    {bits, [E || {bit,E,_} <- Tas]}.
+
 is_string(Value) ->
     try unicode:characters_to_binary(Value) of
 	Utf8 when is_binary(Utf8) -> true;
@@ -525,3 +556,4 @@ pp_yang_range_elem(Value) ->io_lib:format("~w", [Value]).
 pp_yang_range([E]) -> pp_yang_range_elem(E);
 pp_yang_range([E|Es]) -> [pp_yang_range_elem(E),"|",pp_yang_range(Es)];
 pp_yang_range([]) -> "".
+
