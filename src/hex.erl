@@ -212,6 +212,7 @@ validate_flag({Key,Value}, Spec) ->
     end.
 
 validate_choice(Key, Value, Stmts) ->
+    lager:debug("validate_choice: ~p, ~p, ~p", [Key, Value, Stmts]),
     case Value of
 	false -> {error,{Key,badarg}};
 	{Case,CaseValue} ->
@@ -247,6 +248,22 @@ validate_list(_Key, Value, Stmts) ->
 	    case lists:keyfind(ListKey, 2, Stmts1) of
 		{leaf, ListKey, _} ->
 		    validate_flags(Value, Stmts1);
+		{container, ListKey, Stmts2} ->
+		    lists:foldl(
+		      fun({K,V}, Acc) when K =:= ListKey ->
+			      case validate_flags(V, Stmts2)of
+				  ok -> ok;
+				  E -> [E | Acc]
+			      end
+		      end, [], Value);
+		{choice, ListKey, Stmts2} ->
+		    lists:foldl(
+		      fun(V, Acc) ->
+			      case validate_choice(ListKey, V, Stmts2) of
+				  ok -> ok;
+				  E -> [E | Acc]
+			      end
+		      end, [], Value);
 		_W ->
 		    %% io:format("~p\n", [W]),
 		    {error, {missing,ListKey}}
@@ -336,6 +353,16 @@ validate_value(Value, anyxml, _Tas) ->
 validate_value(_Value, 'hex:rfc822', _Tas) ->  %% fixme!
     %% validate email address
     ok;
+validate_value(Value, 'yang:ip-address', _Tas) when is_tuple(Value)-> 
+    case inet:ntoa(Value) of
+	Address when is_list(Address) -> ok;
+	{error, einval} -> badarg
+    end;
+validate_value(Value, 'yang:ip-address', _Tas) when is_list(Value)-> 
+    case inet_parse:address(Value) of
+	{ok, _Address} -> ok;
+	{error, einval} -> badarg
+    end;
 validate_value(Value, 'yang:domain-name',_Tas) -> %% fixme!
     try inet_parse:domain(Value) of
 	true -> ok;
