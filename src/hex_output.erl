@@ -255,7 +255,7 @@ event_spec() ->
 		   ]},
      {leaf,digital, [{type,boolean,[]},
 		     {default,true,[]},
-		     {description, "if 'digital' is true the a digital "
+		     {description, "if 'digital' is true then a digital "
 		      "signal is sent in transmit or feedback otherwise "
 		      "an analog signal is sent.",
 		      []}
@@ -319,13 +319,20 @@ init({Flags,Actions0}) ->
     Value  = #target { name=value, type=clamp, delta=1.0, pos=#opt.value },
     Targets = dict:from_list([{value,Value}]),
     Actions = rewrite_actions(Actions0),
-    State0 = #state { actions = Actions,
-		      in_config = #opt {}, 
-		      out_config = #opt {},
-		      targets = Targets },
+    State00 = #state { in_config = #opt {}, 
+		       out_config = #opt {},
+		       targets = Targets },
+    State0 = install_actions(Actions, State00),
+    
     %% fixme run initial eval!
     %% fixme: send input mapping here?
-    case set_options(Flags, State0) of
+    DefaultVars = [{enable,State0#state.enable},
+		   {disable,State0#state.disable},
+		   {active,State0#state.active},
+		   {inactive,State0#state.inactive},
+		   {output,State0#state.output}],
+		    
+    case set_options(DefaultVars++Flags, State0) of
 	{ok, State1} ->
 	    Core1 = hex_core:set_value(value, 0, State1#state.core),
 	    Core2 = hex_core:eval(Core1),
@@ -670,19 +677,7 @@ state_wait(_Event, State) ->
 do_activate(Event, State) ->
     ?verbose("DO_ACTIVATE",[]),
     OConfig = State#state.out_config,
-    Inhibited = if OConfig#opt.inhibit > 0 -> 
-			%% handle in handle_info instead of state since,
-			%% this cover all states, there should be an
-			%% gen_fsm:start_timer_all(...)
-			erlang:start_timer(OConfig#opt.inhibit, self(), 
-					   inhibit_done),
-			?verbose("inhibit started for: ~w ms",
-				 [OConfig#opt.inhibit]),
-			true;
-		   true -> false
-		end,
-    State1 = State#state { counter = OConfig#opt.repeat, 
-			   inhibited = Inhibited },
+    State1 = State#state { counter = OConfig#opt.repeat },
     do_reactivate(Event, State1).
 
 do_reactivate(_Event, State) ->
@@ -1077,10 +1072,13 @@ do_analog_value(A, State) when is_integer(A) -> %% allow number soon?
 %%
 
 do_input(_Type, Name, Value, Delta, Src, State) ->
+    lager:debug("do_input: ~s = ~w delta=~w, src=~w",
+		[Name, Value, Delta, Src]),
+    PrevEnabled = State#state.enable_value,
     case dict:find(Name, State#state.targets) of
 	error ->
 	    lager:error("target ~s not found", [Name]),
-	    {State#state.enable_value, 0, State};
+	    {PrevEnabled, State};
 	{ok,Target} ->
 	    Value1 = if Delta =/= 0 ->
 			     Value + target_in_value(Target, State);
@@ -1108,30 +1106,56 @@ do_input(_Type, Name, Value, Delta, Src, State) ->
 	    end,
 	    Output = hex_core:value(State#state.output_var,Core2),
 	    Env = [{Name,Value2},{output,Output},{source,Src}],
-	    {Enabled,State2} =
-	    case State#state.enable_value of
+	    Enabled =
+	    case PrevEnabled of
 		0 ->
 		    case hex_core:value(State#state.enable_var, Core2) of
-			0 ->
-			    {0,State1};
-			_ ->
-			    feedback(Output, State),
-			    {1,action(Env,State1)}
+			0 -> 0;
+			E when is_integer(E), E>0 ->
+			    feedback(Output, State), 1
 		    end;
 		1 ->
 		    case hex_core:value(State#state.disable_var, Core2) of
 			0 ->
-			    feedback(Output, State),
-			    {0,action(Env,State)};
-			_ ->
-			    feedback(Output, State),
-			    {1,action(Env,State)}
+			    feedback(Output, State), 1;
+			D when is_integer(D), D>0 ->
+			    feedback(Output, State), 0
 		    end
 	    end,
-	    {Enabled, State2#state { enable_value = Enabled,
-				     active_value = Active,
-				     core = Core2 }}
+	    Inhibited = State#state.inhibited,
+	    State2 = State1#state { enable_value = Enabled,
+				   active_value = Active,
+				   core = Core2 },
+	    if not Inhibited, Enabled =:= 1, PrevEnabled =:= 0 ->
+		    State3 = action(Env, State2),
+		    State4 = start_inhibation(State3),
+		    {Enabled, State4};
+	       Enabled =:= 0, PrevEnabled =:= 1 ->
+		    State3 = action(Env, State2),
+		    {Enabled, State3};
+	       true ->
+		    {Enabled, State2}
+	    end
     end.
+
+start_inhibation(State) when not State#state.inhibited ->
+    OConfig = State#state.out_config,
+    if OConfig#opt.inhibit > 0 -> 
+	    %% handle in handle_info instead of state since,
+	    %% this cover all states, there should be an
+	    %% gen_fsm:start_timer_all(...)
+	    erlang:start_timer(OConfig#opt.inhibit, 
+			       self(), 
+			       inhibit_done),
+	    ?verbose("inhibit started for: ~w ms",
+		     [OConfig#opt.inhibit]),
+	    State#state { inhibited = true };
+       true -> 
+	    State
+    end;
+start_inhibation(State) ->
+    State.
+
 
 
 set_value(Target, X, Delta, State) ->
@@ -1311,13 +1335,13 @@ feedback(Value0, State) ->
     transmit_signal(Signal, Env, State).
 
 action(Env, State) ->
-    lager:debug("action env=~w\n", [alue,Env]),
+    lager:debug("action env=~w\n", [Env]),
     action_list(State#state.actions, Env, State).
     
 action_list([{Cond,Action} | Actions], Env, State) ->
     case hex_core:value(Cond, State#state.core) of
 	0 ->
-	    lager:debug("eval ~p = 0\n", [Cond]),
+	    lager:debug("eval var ~p = 0\n", [Cond]),
 	    action_list(Actions, Env, State);
 	_CondVal ->
 	    lager:debug("eval ~p = ~p\n", [Cond,_CondVal]),
@@ -1351,3 +1375,17 @@ rewrite_actions([{Expr,{App,Flags}} | Actions]) ->
     [{Expr1,{App,Flags}} | rewrite_actions(Actions)];
 rewrite_actions([]) ->
     [].
+
+install_actions(Actions, State) ->
+    install_actions_(Actions, State#state.core, [], State).
+
+install_actions_([{Expr,AppFlags}|Actions], Core, Acc, State) ->
+    {Var,Core1} = hex_core:add_expr(Expr, Core),
+    install_actions_(Actions, Core1, [{Var,AppFlags}|Acc], State);
+install_actions_([], Core, Acc, State) ->
+    State#state { core = Core,
+		  actions = lists:reverse(Acc) }.
+
+
+    
+    
