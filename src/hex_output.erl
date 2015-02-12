@@ -323,7 +323,6 @@ init({Flags,Actions0}) ->
 		      in_config = #opt {}, 
 		      out_config = #opt {},
 		      targets = Targets },
-    %% fixme run initial eval!
     %% fixme: send input mapping here?
     case set_options(Flags, State0) of
 	{ok, State1} ->
@@ -331,8 +330,8 @@ init({Flags,Actions0}) ->
 	    Core2 = hex_core:eval(Core1),
 
 	    A = case hex_core:value(State0#state.active_var, Core2) of
-		    0 -> transmit_active(0, State1), 0;
-		    _ -> transmit_active(1, State1), 1
+		    0 -> 0;
+		    _ -> 1
 		end,
 	    transmit_active(A, State1),
 
