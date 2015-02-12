@@ -255,7 +255,7 @@ event_spec() ->
 		   ]},
      {leaf,digital, [{type,boolean,[]},
 		     {default,true,[]},
-		     {description, "if 'digital' is true the a digital "
+		     {description, "if 'digital' is true then a digital "
 		      "signal is sent in transmit or feedback otherwise "
 		      "an analog signal is sent.",
 		      []}
@@ -319,12 +319,18 @@ init({Flags,Actions0}) ->
     Value  = #target { name=value, type=clamp, delta=1.0, pos=#opt.value },
     Targets = dict:from_list([{value,Value}]),
     Actions = rewrite_actions(Actions0),
-    State0 = #state { actions = Actions,
-		      in_config = #opt {}, 
-		      out_config = #opt {},
-		      targets = Targets },
-    %% fixme: send input mapping here?
-    case set_options(Flags, State0) of
+    State00 = #state { in_config = #opt {}, 
+		       out_config = #opt {},
+		       targets = Targets },
+    State0 = install_actions(Actions, State00),
+    %% fixme: transmit input mapping?
+    DefaultVars = [{enable,State0#state.enable},
+		   {disable,State0#state.disable},
+		   {active,State0#state.active},
+		   {inactive,State0#state.inactive},
+		   {output,State0#state.output}],
+		    
+    case set_options(DefaultVars++Flags, State0) of
 	{ok, State1} ->
 	    Core1 = hex_core:set_value(value, 0, State1#state.core),
 	    Core2 = hex_core:eval(Core1),
@@ -366,14 +372,14 @@ init({Flags,Actions0}) ->
 %%--------------------------------------------------------------------
 state_off(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    case do_input(Event, State) of
-	{0, State1} ->
-	    {next_state, state_off, State1};
-	{1,State1} ->
-	    if State1#state.inhibited ->
-		    ?verbose("inhibited in state_off", []),
+    if State#state.inhibited ->
+	    ?verbose("inhibited in state_off", []),
+	    {next_state, state_off, State};
+       true ->
+	    case do_input(Event, State) of
+		{0, State1} ->
 		    {next_state, state_off, State1};
-	       true ->
+		{1,State1} ->
 		    {_,{_,_,Src}} = Event,
 		    do_activate(Event, State1#state { env = [{source,Src}] })
 	    end
@@ -538,14 +544,14 @@ state_deact({timeout,TRef,deact}, State) when State#state.tref =:= TRef ->
 
 state_deact(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
-    case do_input(Event, State) of
-	{0, State1} ->
-	    {next_state, state_deact, State1};
-	{1, State1} ->
-	    if State1#state.inhibited ->
-		    ?verbose("inhibited in state_deact", []),
+    if State#state.inhibited ->
+	    ?verbose("inhibited in state_deact", []),
+	    {next_state, state_deact, State};
+       true ->
+	    case do_input(Event, State) of
+		{0, State1} ->
 		    {next_state, state_deact, State1};
-	       true ->
+		{1, State1} ->
 		    lager:debug("deact cancelled from ~p", [Src]),
 		    _Remain = gen_fsm:cancel_timer(State#state.tref),
 		    %% FIXME: calculate remain sustain? 
@@ -610,16 +616,16 @@ state_rampdown({timeout,TRef,done}, State) when State#state.tramp =:= TRef ->
     state_wait(init, State2);
 state_rampdown(Event={Name,{_Type,Value,Src}}, State) when 
       is_atom(Name), is_integer(Value) ->
-    case do_input(Event, State) of
-	{0, State1} ->
-	    lager:debug("deactivate during rampdown from ~p", [Src]),
-	    %% mark for deactivation - when ramp is done
-	    {next_state, state_rampdown, State1#state { deactivate=true }};
-	{1, State1} ->
-	    if State1#state.inhibited ->
-		    ?verbose("inhibited in state_rampdown", []),
-		    {next_state, state_rampdown, State1};
-	       true ->
+    if State#state.inhibited ->
+	    ?verbose("inhibited in state_rampdown", []),
+	    {next_state, state_rampdown, State};
+       true ->
+	    case do_input(Event, State) of
+		{0, State1} ->
+		    lager:debug("deactivate during rampdown from ~p", [Src]),
+		    %% mark for deactivation - when ramp is done
+		    {next_state, state_rampdown, State1#state { deactivate=true }};
+		{1, State1} ->
 		    lager:debug("rampdown cancelled from ~p", [Src]),
 		    _Remain = gen_fsm:cancel_timer(State1#state.tref),
 		    state_rampup(init, State1#state { tref = undefined,
@@ -669,19 +675,7 @@ state_wait(_Event, State) ->
 do_activate(Event, State) ->
     ?verbose("DO_ACTIVATE",[]),
     OConfig = State#state.out_config,
-    Inhibited = if OConfig#opt.inhibit > 0 -> 
-			%% handle in handle_info instead of state since,
-			%% this cover all states, there should be an
-			%% gen_fsm:start_timer_all(...)
-			erlang:start_timer(OConfig#opt.inhibit, self(), 
-					   inhibit_done),
-			?verbose("inhibit started for: ~w ms",
-				 [OConfig#opt.inhibit]),
-			true;
-		   true -> false
-		end,
-    State1 = State#state { counter = OConfig#opt.repeat, 
-			   inhibited = Inhibited },
+    State1 = State#state { counter = OConfig#opt.repeat },
     do_reactivate(Event, State1).
 
 do_reactivate(_Event, State) ->
@@ -1059,9 +1053,16 @@ do_analog_value(min, State) ->
 do_analog_value(max, State) ->
     #target { in_max=A } = value_target(State),
     do_analog_value(A, State);
-do_analog_value(A, State) when is_integer(A) -> %% allow number soon?
+do_analog_value(A, State) when is_integer(A) ->
     %% FIXME: how to handle enable here?
-    {_Enable,State1} = do_input(?HEX_ANALOG, value, A, 0, internal, State),
+    {_Enable,State1} = 
+	if State#state.digital ->
+		do_input(?HEX_DIGITAL, value, if A>0 -> 1; true -> 0 end, 0, 
+			 internal, State);
+	   true ->
+		do_input(?HEX_ANALOG, value, A, 0,
+			 internal, State)
+	end,
     State1.
 
 %%
@@ -1076,10 +1077,13 @@ do_analog_value(A, State) when is_integer(A) -> %% allow number soon?
 %%
 
 do_input(_Type, Name, Value, Delta, Src, State) ->
+    lager:debug("do_input: ~s = ~w delta=~w, src=~w",
+		[Name, Value, Delta, Src]),
+    PrevEnabled = State#state.enable_value,
     case dict:find(Name, State#state.targets) of
 	error ->
 	    lager:error("target ~s not found", [Name]),
-	    {State#state.enable_value, 0, State};
+	    {PrevEnabled, State};
 	{ok,Target} ->
 	    Value1 = if Delta =/= 0 ->
 			     Value + target_in_value(Target, State);
@@ -1107,30 +1111,56 @@ do_input(_Type, Name, Value, Delta, Src, State) ->
 	    end,
 	    Output = hex_core:value(State#state.output_var,Core2),
 	    Env = [{Name,Value2},{output,Output},{source,Src}],
-	    {Enabled,State2} =
-	    case State#state.enable_value of
+	    Enabled =
+	    case PrevEnabled of
 		0 ->
 		    case hex_core:value(State#state.enable_var, Core2) of
-			0 ->
-			    {0,State1};
-			_ ->
-			    feedback(Output, State),
-			    {1,action(Env,State1)}
+			0 -> 0;
+			E when is_integer(E), E>0 ->
+			    feedback(Output, State), 1
 		    end;
 		1 ->
 		    case hex_core:value(State#state.disable_var, Core2) of
 			0 ->
-			    feedback(Output, State),
-			    {0,action(Env,State)};
-			_ ->
-			    feedback(Output, State),
-			    {1,action(Env,State)}
+			    feedback(Output, State), 1;
+			D when is_integer(D), D>0 ->
+			    feedback(Output, State), 0
 		    end
 	    end,
-	    {Enabled, State2#state { enable_value = Enabled,
-				     active_value = Active,
-				     core = Core2 }}
+	    Inhibited = State#state.inhibited,
+	    State2 = State1#state { enable_value = Enabled,
+				    active_value = Active,
+				    core = Core2 },
+	    if not Inhibited, Enabled =:= 1, PrevEnabled =:= 0 ->
+		    State3 = action(Env, State2),
+		    State4 = start_inhibation(State3),
+		    {Enabled, State4};
+	       Enabled =:= 0, PrevEnabled =:= 1 ->
+		    State3 = action(Env, State2),
+		    {Enabled, State3};
+	       true ->
+		    {Enabled, State2}
+	    end
     end.
+
+start_inhibation(State) when not State#state.inhibited ->
+    OConfig = State#state.out_config,
+    if OConfig#opt.inhibit > 0 -> 
+	    %% handle in handle_info instead of state since,
+	    %% this cover all states, there should be an
+	    %% gen_fsm:start_timer_all(...)
+	    erlang:start_timer(OConfig#opt.inhibit, 
+			       self(), 
+			       inhibit_done),
+	    ?verbose("inhibit started for: ~w ms",
+		     [OConfig#opt.inhibit]),
+	    State#state { inhibited = true };
+       true -> 
+	    State
+    end;
+start_inhibation(State) ->
+    State.
+
 
 
 set_value(Target, X, Delta, State) ->
@@ -1310,13 +1340,13 @@ feedback(Value0, State) ->
     transmit_signal(Signal, Env, State).
 
 action(Env, State) ->
-    lager:debug("action env=~w\n", [alue,Env]),
+    lager:debug("action env=~w\n", [Env]),
     action_list(State#state.actions, Env, State).
     
 action_list([{Cond,Action} | Actions], Env, State) ->
     case hex_core:value(Cond, State#state.core) of
 	0 ->
-	    lager:debug("eval ~p = 0\n", [Cond]),
+	    lager:debug("eval var ~p = 0\n", [Cond]),
 	    action_list(Actions, Env, State);
 	_CondVal ->
 	    lager:debug("eval ~p = ~p\n", [Cond,_CondVal]),
@@ -1350,3 +1380,17 @@ rewrite_actions([{Expr,{App,Flags}} | Actions]) ->
     [{Expr1,{App,Flags}} | rewrite_actions(Actions)];
 rewrite_actions([]) ->
     [].
+
+install_actions(Actions, State) ->
+    install_actions_(Actions, State#state.core, [], State).
+
+install_actions_([{Expr,AppFlags}|Actions], Core, Acc, State) ->
+    {Var,Core1} = hex_core:add_expr(Expr, Core),
+    install_actions_(Actions, Core1, [{Var,AppFlags}|Acc], State);
+install_actions_([], Core, Acc, State) ->
+    State#state { core = Core,
+		  actions = lists:reverse(Acc) }.
+
+
+    
+    
