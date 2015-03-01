@@ -28,8 +28,10 @@ Specification of HomeExchange (Hex) configuration file
       }
 
     user_target() :: atom()
-	builtin_target() :: value|inhibit|delay|rampup|sustain|rampdown|
-                       deact|wait|repeat
+	builtin_target() :: in|an|ena|low|high|inhibit|
+	                    delay|rampup|sustain|rampdown|
+                        deact|wait|repeat|feedback|transmit
+	builtin_output() :: out|enabled|active
 	target() :: builtin_target() | user_target()
 
     input_flag() ::
@@ -99,11 +101,7 @@ Specification of HomeExchange (Hex) configuration file
 
 	target_flag() ::
 		{name, atom()} |
-		{type, clamp | wrap} |
-		{in_min, uint32()} |
-		{in_max, uint32()} |
-		{out_min, uint32()} |
-		{out_max, uint32()}.
+		{value, number()|boolean()|string()}
 
     action() :: plugin_action() | [{cond(),plugin_action()}].
 	plugin_action() :: {App:app(),Flags::[plugin_output_flag()]}.

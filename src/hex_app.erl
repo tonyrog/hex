@@ -26,10 +26,7 @@
 %% ===================================================================
 
 start(_StartType, _StartArgs) ->
-    Opts = case application:get_env(hex, options) of
-	       undefined -> [];
-	       {ok, O1} -> O1
-	   end,
+    Opts = application:get_all_env(hex),
     hex_sup:start_link(Opts).
 
 stop(_State) ->

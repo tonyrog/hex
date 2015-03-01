@@ -33,8 +33,8 @@
 
 
 %% gen_fsm callbacks
--export([init/1, s_neutral/2, s_push/2, 
-	 handle_event/3, handle_sync_event/4, 
+-export([init/1, s_neutral/2, s_push/2,
+	 handle_event/3, handle_sync_event/4,
 	 handle_info/3, terminate/3, code_change/4]).
 
 -define(S_NEUTRAL,    s_neutral).
@@ -70,8 +70,8 @@
 	  encoder_pause = 3000 :: uint32(),
 	  encoder_step = 1 :: int32(),
 	  %% analog config
-	  analog_trigger = 0 :: uint8(),
-	  analog_delta = 1 :: uint32(),
+	  analog_trigger = ?CHANGED_BY_MORE_THAN_DELTA :: uint8(),
+	  analog_delta = 0 :: uint32(),
 	  analog_negative_delta = 1 :: uint32(),
 	  analog_positive_delta = 1 :: uint32(),
 	  analog_max_frequency = 0  :: float(),
@@ -95,7 +95,7 @@
 	  value = 0    :: uint32(),             %% last (digital) value
 	  an_value=0   :: uint32(),             %% last scaled analog value
 	  an_mask = 0  :: uint32(),             %% analog latch_mask
-	  an_inhibit = 0  :: uint32(),          %% abs micro seconds 
+	  an_inhibit = 0  :: uint32(),          %% abs micro seconds
 	  src          :: term(),               %% last source
 	  timestamp    :: erlang:timestamp(),   %% last time
 	  timer        :: reference() | undefined,
@@ -130,22 +130,22 @@ event_spec() ->
 		   {description, "Allow rfid input signals.",[]},
 		   {default, true, []}]},
 
-     {leaf, analog_to_digital, 
+     {leaf, analog_to_digital,
       [{type,boolean,[]},
        {description, "Convert analog to digital signals.",[]},
        {default, false, []}]},
 
-     {leaf, digital_to_analog, 
+     {leaf, digital_to_analog,
       [{type,boolean,[]},
        {description, "Convert digital to analog signals.",[]},
        {default, false, []}]},
 
-     {leaf, on_only, 
+     {leaf, on_only,
       [{type,boolean,[]},
        {description, "Accept digital on signals only.",[]},
        {default, false, []}]},
 
-     {leaf, off_only, 
+     {leaf, off_only,
       [{type,boolean,[]},
        {description, "Accept digital off signals only.",[]},
        {default, false, []}]},
@@ -175,25 +175,25 @@ event_spec() ->
        {description, "Push encoder that only decrements.",[]},
        {default, false, []}]},
 
-     {leaf, encoder_ival, 
+     {leaf, encoder_ival,
       [{type, uint32, []},
        {description, "Push encoder update interval.", []},
        {default, 250, []}]},
 
-     {leaf, encoder_pause, 
+     {leaf, encoder_pause,
       [{type, uint32, []},
        {description, "Push encoder direction switch timeout.", []},
        {default, 3000, []}]},
 
-     {leaf, encoder_step, 
+     {leaf, encoder_step,
       [{type, uint32, []},
        {description, "Push encoder update step.", []},
        {default, 1, []}]},
 
-     {leaf, analog_delta, 
+     {leaf, analog_delta,
       [{type, uint32, []},
        {description, "Analog delta value.", []},
-       {default, 1, []}]},
+       {default, 0, []}]},
 
      {leaf, analog_trigger,
       [{type, bits,
@@ -202,19 +202,21 @@ event_spec() ->
 	 {bit, 'changed-by-more-than-delta',[{position,2,[]}]},
 	 {bit, 'changed-by-more-than-negative-delta',[{position,3,[]}]},
 	 {bit, 'changed-by-more-than-positive-delta',[{position,4,[]}]}
-	]}]},
+	]},
+       {default, ?CHANGED_BY_MORE_THAN_DELTA, []}
+      ]},
 
-     {leaf, analog_negative_delta, 
+     {leaf, analog_negative_delta,
       [{type, uint32, []},
        {description, "Analog negative delta value.", []},
        {default, 1, []}]},
 
-     {leaf, analog_positive_delta, 
+     {leaf, analog_positive_delta,
       [{type, uint32, []},
        {description, "Analog positive delta value.", []},
        {default, 1, []}]},
 
-     {leaf, analog_max_frequency, 
+     {leaf, analog_max_frequency,
       [{type, decimal64, [{'fraction-digits', 6, []}]},
        {description, "Analog max output frequency.", []},
        {default, 0, []}]},
@@ -249,11 +251,11 @@ event_spec() ->
        {description, "Analog offset value.", []},
        {default, 1.0, []}]},
 
-     {leaf, rfid_match, 
+     {leaf, rfid_match,
       [{type, uint32, []},
        {default, 0, []}]},
 
-     {leaf, rfid_mask, 
+     {leaf, rfid_mask,
       [{type, uint32, []},
        {default, 0, []}]},
 
@@ -269,7 +271,7 @@ event_spec() ->
       ]}
     ].
 
-	     
+
 %%--------------------------------------------------------------------
 %% @doc
 %% Creates a gen_fsm process which calls Module:init/1 to
@@ -379,7 +381,7 @@ analog_input(IValue, Src, State, S) ->
 	    output(analog,Opt#opt.analog_min,Src,State,S);
        true ->
 	    output(analog,Value,Src,State,S)
-    end.    
+    end.
 
 rfid_input(Value,Src,State,S) ->
     Opt = S#s.config,
@@ -398,7 +400,7 @@ digital_input(Value0,Src,State,S) ->
     Value = if Opt#opt.invert -> 1-Value0;
 	       true -> Value0
 	    end,
-    if 
+    if
 	Opt#opt.digital_to_analog ->
 	    if Value =:= 0 ->
 		    output(analog,Opt#opt.analog_min,Src,State,S);
@@ -567,7 +569,7 @@ output(analog,Value,Src,State,S) ->
     %% after the levels have been reset
     Mask1 = Mask band Opt#opt.analog_trigger,
 
-    Latch = (Mask1 band ?DELTA_BITS =/= 0) 
+    Latch = (Mask1 band ?DELTA_BITS =/= 0)
 	orelse
 	  ((Mask1 band ?UPPER_LIMIT_EXCEEDED =/= 0)
 	   andalso
@@ -581,7 +583,7 @@ output(analog,Value,Src,State,S) ->
 	    lager:debug("Output: ~w, trigger=~p", [Value,get_trigger(Mask1)]),
 	    send_output(analog,Value,Src,S),
 	    T1 = Now+Opt#opt.inhibit_us,
-	    {next_state, State, S#s { an_value = Value, 
+	    {next_state, State, S#s { an_value = Value,
 				      src=Src,
 				      an_mask = Mask,
 				      timestamp = Now,
@@ -640,7 +642,7 @@ set_option(K, V, Opt) ->
 	analog_max_frequency when is_number(V) ->
 	    T = trunc(1000000.0/V),
 	    Opt#opt { analog_max_frequency = V, inhibit_us = T };
-	analog_upper_limit when ?is_int32(V) -> 
+	analog_upper_limit when ?is_int32(V) ->
 	    Opt#opt { analog_upper_limit = V };
 	analog_lower_limit when ?is_int32(V) ->
 	    Opt#opt { analog_lower_limit = V };
@@ -656,7 +658,7 @@ set_option(K, V, Opt) ->
 	%% output list
 	output when is_list(V) ->
 	    Channel = proplists:get_value(channel, V),
-	    Target  = proplists:get_value(target, V, value),
+	    Target  = proplists:get_value(target, V, in),
 	    if is_integer(Channel), Channel >= 1, Channel =< 254,
 	       is_atom(Target) ->
 		    Opt#opt { outputs = [{Target,Channel}|Opt#opt.outputs]}
@@ -669,7 +671,7 @@ make_trigger([]) -> 0;
 make_trigger('upper-limit-exceeded') ->   ?UPPER_LIMIT_EXCEEDED;
 make_trigger('below_lower_limit') ->    ?BELOW_LOWER_LIMIT;
 make_trigger('changed-by-more-than-delta') ->    ?CHANGED_BY_MORE_THAN_DELTA;
-make_trigger('changed-by-more-than-negative-delta') -> 
+make_trigger('changed-by-more-than-negative-delta') ->
     ?CHANGED_BY_MORE_THAN_NEGATIVE_DELTA;
 make_trigger('changed-by-more-than-positive-delta') ->
     ?CHANGED_BY_MORE_THAN_POSITIVE_DELTA.

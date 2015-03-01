@@ -16,8 +16,8 @@
 -export([value/2, tick/2]).
 -export([dump/1]).
 
--define(dbg(F,A), io:format((F),(A))).
-%%-define(dbg(F,A), ok).
+%% -define(dbg(F,A), io:format((F),(A))).
+-define(dbg(F,A), ok).
 
 -type variable() :: integer() | atom().
 
@@ -62,8 +62,12 @@ parse(String) when is_list(String) ->
     parse_tokens(Ts).
 
 parse_tokens(Ts) ->
-    {ok,[Expr]} = erl_parse:parse_exprs(Ts),
-    rewrite_expr(Expr).
+    case erl_parse:parse_exprs(Ts) of
+	{ok,[Expr]} ->
+	    {ok,rewrite_expr(Expr)};
+	Error ->
+	    Error
+    end.
 
 %%
 %% Simple token scanner using erlang scanner
@@ -98,7 +102,7 @@ rewrite_tokens([T|Ts],Acc) ->
 	    end;
 	{'||',Ln} -> rewrite_tokens(Ts, [{'or',Ln}|Acc]);
 	{'&',Ln} ->
-	    case Ts of 
+	    case Ts of
 		[{'&',Ln}|Ts1] -> rewrite_tokens(Ts1, [{'and',Ln}|Acc]);
 		_ -> rewrite_tokens(Ts, [{'&',Ln}|Acc])
 	    end;
@@ -142,15 +146,16 @@ rewrite_tokens([T|Ts],Acc) ->
     end;
 rewrite_tokens([], Acc) ->
     lists:reverse(Acc).
-    
+
 %%
 %% Simplify expression
 %%
 rewrite_expr({atom,_,true})  -> {const,1};
 rewrite_expr({atom,_,false}) -> {const,0};
-rewrite_expr({atom,_,Target}) when is_atom(Target) -> Target;
-rewrite_expr({var,_,Target}) when is_atom(Target) -> Target;
-rewrite_expr({integer,_,Value}) -> {const,Value};
+rewrite_expr({atom,_,V}) when is_atom(V) -> V;
+rewrite_expr({var,_,V}) when is_atom(V) -> V;
+rewrite_expr({integer,_,I}) -> {const,I};
+rewrite_expr({float,_,F}) -> {const,F};
 
 rewrite_expr({op,_,'and',A,B}) -> {'and',rewrite_expr(A),rewrite_expr(B)};
 rewrite_expr({op,_,'or',A,B}) ->  {'or',rewrite_expr(A),rewrite_expr(B)};
@@ -161,17 +166,40 @@ rewrite_expr({op,_,'not',A}) ->  {'not',rewrite_expr(A)};
 rewrite_expr({call,_,{atom,_,updated},[A]}) -> {updated, rewrite_expr(A)};
 rewrite_expr({call,_,{atom,_,changed},[A]}) -> {changed, rewrite_expr(A)};
 
+%% clamp(v,x0,x1) when x0 =< x1, clamp v within [x0..x1] = min(max(v,x0), x1)
+%%
+rewrite_expr({call,_L,{atom,_,clamp},[V,X0,X1]}) ->
+    rewrite_expr({call,_L,{atom,_L,min},[{call,_L,{atom,_L,max},[V,X0]}, X1]});
+
+%% wrap(v,x0,x1) when x0 =< x1, mod((v-x0),(x1-x0+1)) + x0
+rewrite_expr({call,_L,{atom,_,wrap},[V,X0,X1]}) ->
+    A = {call,_L,{atom,_L,mod},[{op,_L,'-',V,X0},
+				{op,_L,'+',{op,_L,'-',X1,X0},{integer,_L,1}}]},
+    rewrite_expr({op,_L,'+',A,X0});
+
+%% map(var,x0,x1,y0,y1) clamp x within x0-x1 and scale into y0-y1
+%%  d = (y1-y0)/(x1-x0), trunc( (v-x0)*d + y0 )
+rewrite_expr({call,_L,{atom,_,map},[V,X0,X1,Y0,Y1]}) ->
+    D = {op,_L,'/',{op,_L,'-',Y1,Y0},{op,_L,'-',X1,X0}},
+    M = {op,_L,'+',{op,_L,'*',{op,_L,'-',V,X0},D}, Y0},
+    rewrite_expr({call,_L,{atom,_L,trunc},[M]});
+
 %% arithmetical
-rewrite_expr({op,_,'+',A,B}) -> {'+',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'-',A,B}) ->  {'-',rewrite_expr(A),rewrite_expr(B)};
-rewrite_expr({op,_,'*',A,B}) ->  {'*',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'+',A,B})   -> {'+',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'-',A,B})   -> {'-',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'*',A,B})   -> {'*',rewrite_expr(A),rewrite_expr(B)};
 rewrite_expr({op,_,'div',A,B}) -> {'div',rewrite_expr(A),rewrite_expr(B)};
 rewrite_expr({op,_,'rem',A,B}) -> {'rem',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({op,_,'/',A,B})   -> {'/',rewrite_expr(A),rewrite_expr(B)};
 
 rewrite_expr({call,_,{atom,_,max},[A,B]}) ->
     {'max',rewrite_expr(A),rewrite_expr(B)};
 rewrite_expr({call,_,{atom,_,min},[A,B]}) ->
     {'min',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({call,_,{atom,_,mod},[A,B]}) ->
+    {'mod',rewrite_expr(A),rewrite_expr(B)};
+rewrite_expr({call,_,{atom,_,trunc},[A]}) ->
+    {'trunc',rewrite_expr(A)};
 
 rewrite_expr({op,_,'-',A}) -> {'-',rewrite_expr(A)};
 
@@ -197,24 +225,27 @@ rewrite_expr({op,_,'>=',A,B}) -> {'>=',rewrite_expr(A),rewrite_expr(B)};
 rewrite_expr({op,_,'>',A,B}) -> {'>',rewrite_expr(A),rewrite_expr(B)}.
 
 %% install variable into value set
--spec add_variable(Var::atom(), R::#core{}) -> #core{}.
+-spec add_variable(Var::atom(), R::#core{}) -> {variable(), #core{}}.
 
 add_variable(Var, Core) when is_atom(Var), is_record(Core, core) ->
     case dict:find(Var, Core#core.expr) of
 	error ->
-	    {_Vi,Core1} = new_var_(Var, 0, Core),
-	    Core1;
-	{ok,_Vi} ->
-	    Core
+	    new_var_(Var, 0, Core);
+	{ok,Vi} ->
+	    {Vi,Core}
     end.
 
--spec add_variables([Var::atom()], Core::#core{}) -> #core{}.
+-spec add_variables([Var::atom()], Core::#core{}) -> {Vars::[variable()],
+						      #core{}}.
 
-add_variables([Var|Vs], Core) ->
-    Core1 = add_variable(Var, Core),
-    add_variables(Vs, Core1);
-add_variables([], Core) ->
-    Core.
+add_variables(Vs, Core) ->
+    add_variables_(Vs, Core,[]).
+
+add_variables_([Var|Vs], Core, Acc) when is_atom(Var) ->
+    {Vi,Core1} = add_expr(Var, Core),
+    add_variables_(Vs, Core1,[Vi|Acc]);
+add_variables_([], Core,Acc) ->
+    {lists:reverse(Acc),Core}.
 
 %% install expression into rule set
 -spec add_expr(Expr::term(), R::#core{}) -> {Var::variable(), #core{}}.
@@ -229,7 +260,7 @@ add_expr(Expr, Core) ->
 	    {Ai,CoreA} = add_expr(A,Core),
 	    {Bi,CoreB} = add_expr(B,CoreA),
 	    add_expr_({Op,Ai,Bi},CoreB);
-	C={const,_} -> 
+	C={const,_} ->
 	    {C,Core};
 	{Op,A} ->
 	    {Ai,CoreA} = add_expr(A,Core),
@@ -280,7 +311,7 @@ add_refs(_Ci, _Expr, Refs) ->
 %% get current value
 -spec value(Var::variable(), Core::#core{}) -> integer().
 
-value({const,Val}, _Core) -> 
+value({const,Val}, _Core) ->
     Val;
 value(Var, Core) when is_atom(Var), is_record(Core, core) ->
     case dict:find(Var, Core#core.expr) of
@@ -296,22 +327,27 @@ value(Vi, Core) when is_integer(Vi), is_record(Core, core) ->
 tick(Var, Core) when is_atom(Var), is_record(Core, core) ->
     dict:fetch(Var, Core#core.ticks).
 
-
 %% set value and enqueue dependecies
--spec set_value(Var::variable(), Value::integer(), Core::#core{}) -> #core{}.
+-spec set_value(Var::variable(), Value::integer(), Core::#core{}) ->
+		       {variable(),#core{}}.
+
 set_value(Var, Value, Core) when is_atom(Var), is_record(Core, core) ->
-    set_value_(Var, Value, Core).
+    set_value_(Var, Value, Core);
+set_value(Vi, Value, Core) when is_integer(Vi), is_record(Core, core) ->
+    set_value__(Vi, Value, Core).
 
 set_value_(Var, Value, Core) ->
     case dict:find(Var, Core#core.expr) of
 	error ->
-	    {_Vi,Core1} = new_var_(Var, Value, Core),
-	    Core1;
+	    new_var_(Var, Value, Core);
 	{ok,Vi} ->
-	    Values = store_value_(Vi, Value, Core#core.values),
-	    Ticks  = store_tick_(Vi, Core#core.tick, Core#core.ticks),
-	    enqueue_(Vi, Core#core { values=Values, ticks=Ticks })
+	    {Vi, set_value__(Vi, Value, Core)}
     end.
+
+set_value__(Vi, Value, Core) ->
+    Values = store_value_(Vi, Value, Core#core.values),
+    Ticks  = store_tick_(Vi, Core#core.tick, Core#core.ticks),
+    enqueue_(Vi, Core#core { values=Values, ticks=Ticks }).
 
 -spec set_values([{Var::variable(),Value::integer()}],Core::#core{}) -> #core{}.
 
@@ -319,11 +355,11 @@ set_values(List, Core) when is_list(List), is_record(Core, core) ->
     set_values_(List, Core).
 
 set_values_([{Var,Value}|List], Core) when is_atom(Var), is_integer(Value) ->
-    Core1 = set_value_(Var,Value,Core),
+    {_Vi,Core1} = set_value_(Var,Value,Core),
     set_values_(List, Core1);
 set_values_([], Core) ->
     Core.
-    
+
 %% enqueue all variables that reference Var
 enqueue_(Var, Core) ->
     enqueue_(refs(Var, Core#core.refs),
@@ -331,7 +367,7 @@ enqueue_(Var, Core) ->
 
 enqueue_([Yi|Ys], Queue, QSet, Core) ->
     case sets:is_element(Yi, QSet) of
-	true -> 
+	true ->
 	    enqueue_(Ys, Queue, QSet, Core);
 	false ->
 	    ?dbg("enqueue: ~w\n", [Yi]),
@@ -340,7 +376,7 @@ enqueue_([Yi|Ys], Queue, QSet, Core) ->
 enqueue_([], Queue, QSet, Core) ->
     Core#core { queue = Queue, queue_set = QSet }.
 
-    
+
 %% Run eval.
 -spec eval(Core::#core{}) -> #core{}.
 
@@ -419,7 +455,7 @@ eval_enqueue(Xi,Queue,QSet,Values,Ticks,CurrentTick,Core) ->
 %% enqueue all references not already in queue or already processed
 eval_enqueue_([Yi|Ys],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
     case sets:is_element(Yi, QSet) of
-	true -> 
+	true ->
 	    eval_enqueue_(Ys,Queue,QSet,Values,Ticks,CurrentTick,Core);
 	false ->
 	    ?dbg("eval_enqueue: ~w\n", [Yi]),
@@ -433,7 +469,7 @@ eval_enqueue_([],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
 -ifdef(__not_used__).
 eval_enqueue_r_([Yi|Ys],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
     case sets:is_element(Yi, QSet) of
-	true -> 
+	true ->
 	    eval_enqueue_r_(Ys,Queue,QSet,Values,Ticks,CurrentTick,Core);
 	false ->
 	    ?dbg("eval_enqueue_r: ~w\n", [Yi]),
@@ -444,12 +480,12 @@ eval_enqueue_r_([],Queue,QSet,Values,Ticks,CurrentTick,Core) ->
     eval_queue(Queue,QSet,Values,Ticks,CurrentTick,Core).
 -endif.
 
-refs(Var, Dict) ->    
+refs(Var, Dict) ->
     case dict:find(Var, Dict) of
 	error -> [];
 	{ok,Refs} -> Refs
     end.
-    
+
 %% fetch a tick (last updated tick) or return -1 if not found
 tick_(Var, Dict) ->
     case dict:find(Var, Dict) of
@@ -473,10 +509,10 @@ store_tick_(Var, Tick, Dict) ->
 value_({const,Value}, _Dict) -> Value;
 value_(Var, Dict) -> dict:fetch(Var, Dict).
 
-%% special since previous of 
+%% special since previous of
 prev_(Var, Dict) ->
     case dict:find(Var,Dict) of
-	error -> 
+	error ->
 	    io:format("prev_: prev(~w)=undefined\n", [Var]),
 	    0;
 	{ok,Val} -> Val
@@ -490,7 +526,7 @@ new_var_(Var, Init, Core) ->
     Rules = array:set(Vi, Var, Core#core.rules),
     Vals = store_value_(Vi, Init, Core#core.values),
     Ticks  = store_tick_(Vi, Core#core.tick, Core#core.ticks),
-    {Vi,Core#core { expr=Vars, rules=Rules, values=Vals, 
+    {Vi,Core#core { expr=Vars, rules=Rules, values=Vals,
 		    ticks=Ticks, next_var=Vi+1 }}.
 
 %% dump core structure for debugging
@@ -520,26 +556,34 @@ dump(Core) when is_record(Core, core) ->
 	       end, ok, Core#core.expr),
     io:format("END\n").
 
-    
-ev_expr('+',A,B) -> A+B;
-ev_expr('-',A,B) -> A-B;
-ev_expr('*',A,B) -> A*B;
+ev_expr('+',A,B)   -> A+B;
+ev_expr('-',A,B)   -> A-B;
+ev_expr('*',A,B)   -> A*B;
 ev_expr('div',A,B) -> A div B;
+ev_expr('/',A,B)   -> A / B;
 ev_expr('rem',A,B) -> A rem B;
 ev_expr('min',A,B) -> min(A,B);
 ev_expr('max',A,B) -> max(A,B);
 ev_expr('and',A,B) -> min(A,B);
 ev_expr('or',A,B)  -> max(A,B);
 ev_expr('xor',A,B) -> 1-ev_bool(A =:= B);
-ev_expr('==',A,B) -> ev_bool(A =:= B);
-ev_expr('/=',A,B) -> ev_bool(A =/= B);
-ev_expr('=<',A,B) -> ev_bool(A =< B);
-ev_expr('<',A,B) -> ev_bool(A < B);
-ev_expr('>',A,B) -> ev_bool(A > B);
-ev_expr('>=',A,B) -> ev_bool(A >= B).
-    
+ev_expr('==',A,B)  -> ev_bool(A =:= B);
+ev_expr('/=',A,B)  -> ev_bool(A =/= B);
+ev_expr('=<',A,B)  -> ev_bool(A =< B);
+ev_expr('<',A,B)   -> ev_bool(A < B);
+ev_expr('>',A,B)   -> ev_bool(A > B);
+ev_expr('>=',A,B)  -> ev_bool(A >= B);
+ev_expr('mod',A,B) ->
+    A1 = A rem B,
+    if A1 < 0 ->
+	    A1 + B;
+       true ->
+	    A1
+    end.
+
 ev_expr('not',A) -> ev_bool(A =:= 0);
-ev_expr('-',A) -> -A.
+ev_expr('-',A) -> -A;
+ev_expr('trunc',A) -> trunc(A).
 
 ev_bool(true) -> 1;
 ev_bool(false) -> 0.

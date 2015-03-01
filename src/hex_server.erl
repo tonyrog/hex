@@ -42,8 +42,10 @@
 -define(SERVER, ?MODULE).
 -define(TABLE, hex_table).
 
+-type config() :: term().
+
 -record(state, {
-	  file = "" :: string(),
+	  config = default :: default | {file,string()} | [config()],
 	  nodeid = 0 :: integer(),
 	  tab :: ets:tab(),
 	  out_list = []    :: [{Label::integer(), Pid::pid()}],
@@ -93,16 +95,21 @@ start_link(Options) ->
 init(Options) ->
     Tab = ets:new(?TABLE, [named_table]),
     Nodeid = proplists:get_value(nodeid, Options, 1),
-    Name = proplists:get_value(config, Options, "local.conf"),
-    File = case filename:dirname(Name) of
-	       "." -> filename:join(code:priv_dir(hex), Name);
-	       _ -> Name
-	   end,
-    lager:debug("starting hex_server nodeid=~.16B, config=~s",
-		[Nodeid, File]),
+    Config =
+	case proplists:get_value(config, Options, default) of
+	    default ->
+		{file, "local.conf"};
+	    ConfigOpt ->
+		case hex:is_string(ConfigOpt) of
+		    true -> {file, hex:text_expand(ConfigOpt,[])};
+		    false -> ConfigOpt
+		end
+	end,
+    lager:debug("starting hex_server nodeid=~.16B, config=~p",
+		[Nodeid, Config]),
     self() ! reload,
     {ok, #state{ nodeid = Nodeid,
-		 file = File,
+		 config = Config,
 		 tab = Tab,
 		 input_rules = []
 	       }}.
@@ -122,22 +129,28 @@ init(Options) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({load,File}, _From, State) ->
-    case reload(File, State) of
-	{ok,State1} ->
-	    {reply, ok, State1#state { file = File}};
-	Error ->
-	    {reply, Error, State}
+    case hex:is_string(File) of
+	true ->
+	    File1 = hex:text_expand(File,[]),
+	    case reload(File1, State) of
+		{ok,State1} ->
+		    {reply, ok, State1#state { config={file,File1}}};
+		Error ->
+		    {reply, Error, State}
+	    end;
+	false ->
+	    {reply, {error,einval}, State}
     end;
 handle_call(reload, _From, State) ->
-    case reload(State#state.file, State) of
+    case reload(State#state.config, State) of
 	{ok,State1} ->
 	    {reply, ok, State1};
 	Error ->
 	    {reply, Error, State}
     end;
-handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid), 
+handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid),
 						   is_atom(AppName) ->
-    io:format("application ~w [~w] joined\n", [AppName,Pid]),
+    lager:info("plugin ~s [~w] joined", [AppName,Pid]),
     AppMon = erlang:monitor(process,Pid),
     %% schedule load of event defintions for App in a while
     self() ! {init_plugin, AppName},
@@ -159,6 +172,7 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({event,Signal=#hex_signal{}}, State) ->
+    %% io:format("handle_cast:EVENT ~p\n", [Signal]),
     lager:debug("input event: ~p\n", [Signal]),
     run_event(Signal, State#state.input_rules, State),
     {noreply, State};
@@ -168,9 +182,9 @@ handle_cast({transmit,Signal=#hex_signal{}}, State) ->
     run_transmit(Signal, State#state.transmit_rules),
     {noreply, State};
 
-handle_cast({join,Pid,AppName}, State) when is_pid(Pid), 
+handle_cast({join,Pid,AppName}, State) when is_pid(Pid),
 					    is_atom(AppName) ->
-    io:format("application ~w [~w] joined\n", [AppName,Pid]),
+    lager:info("plugin ~s [~w] joined", [AppName,Pid]),
     AppMon = erlang:monitor(process,Pid),
     %% schedule load of event defintions for App in a while
     self() ! {init_plugin, AppName},
@@ -194,7 +208,7 @@ handle_cast(_Cast, State) ->
 %%--------------------------------------------------------------------
 handle_info(reload, State) ->
     lager:debug("reload", []),
-    case reload(State#state.file, State) of
+    case reload(State#state.config, State) of
 	{ok,State1} ->
 	    {noreply, State1};
 	_Error ->
@@ -202,7 +216,7 @@ handle_info(reload, State) ->
     end;
 
 handle_info({init_plugin, AppName}, State) ->
-    io:format("INIT PLUGIN: ~s\n", [AppName]),
+    lager:debug("init PLUGIN: ~s", [AppName]),
     %% reload all events for Plugin AppName
     {noreply, State};
 
@@ -211,9 +225,9 @@ handle_info({'DOWN',Ref,process,_Pid,_Reason}, State) ->
 	false ->
 	    {noreply, State};
 	{value,{App,_Ref},PluginUp} ->
-	    io:format("PUGIN DOWN: ~s reason=~p\n", [App,_Reason]),
+	    lager:warning("pugin DOWN: ~s reason=~p", [App,_Reason]),
 	    PluginDown = [App|State#state.plugin_down],
-	    {noreply, State#state { plugin_up   = PluginUp, 
+	    {noreply, State#state { plugin_up   = PluginUp,
 				    plugin_down = PluginDown }}
     end;
 handle_info(_Info, State) ->
@@ -249,22 +263,30 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-reload(File, State) ->
+reload({file,File}, State) ->
     case file:consult(File) of
 	{ok,Config} ->
-	    case hex_config:scan(Config) of
-		{ok,{Evt,In,Out,Trans}} ->
-		    State1 = start_outputs(Out, State),
-		    State2 = start_inputs(In, State1),
-		    State3 = start_events(Evt, State2),
-		    State4 = start_transmit(Trans, State3),
-		    {ok, State4#state { input_rules = In }};
-		Error={error,Reason} ->
-		    io:format("error loading ~s\n~p\n", [File,Reason]),
-		    Error
-	    end;
+	    rescan(Config, File, State);
 	Error={error,Reason} ->
-	    io:format("error loading ~s\n~p\n", [File,Reason]),
+	    io:format("~s: file error:  ~p\n", [File,Reason]),
+	    lager:error("error loading file ~s\n~p", [File,Reason]),
+	    Error
+    end;
+reload(Config, State) ->
+    rescan(Config, "*config*", State).
+
+
+rescan(Config, File, State) ->
+    case hex_config:scan(Config) of
+	{ok,{Evt,In,Out,Trans}} ->
+	    State1 = start_outputs(Out, State),
+	    State2 = start_inputs(In, State1),
+	    State3 = start_events(Evt, State2),
+	    State4 = start_transmit(Trans, State3),
+	    {ok, State4#state { input_rules = In }};
+	Error={error,Reason} ->
+	    io:format("config error ~p\n", [Reason]),
+	    lager:error("error config file ~s, ~p", [File,Reason]),
 	    Error
     end.
 
@@ -272,12 +294,12 @@ reload(File, State) ->
 start_outputs([#hex_output { label=L, flags=Flags, actions=Actions} | Out],
 	      State) ->
     case Actions of
-	{App,AppFlags} -> 
+	{App,AppFlags} ->
 	    start_plugin(App,out,AppFlags);
 	_ when is_list(Actions) ->
 	    lists:foreach(
 	      fun({_Pattern,{App,AppFlags}}) ->
-		      start_plugin(App,out,AppFlags) 
+		      start_plugin(App,out,AppFlags)
 	      end, Actions)
     end,
     %% nodeid and chan is needed for feedback from output
@@ -298,7 +320,7 @@ start_inputs([#hex_input { label=L, flags = Flags } | In],
 start_inputs([], State) ->
     State.
 
-%% start 
+%% start
 start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
 	     State) ->
     case start_plugin(App, in, Flags) of
@@ -325,7 +347,7 @@ start_transmit([T=#hex_transmit { app=App,flags=Flags } |
     end;
 start_transmit([], State) ->
     State.
-    
+
 
 start_plugin(App, Dir, Flags) ->
     case hex:start_all(App) of
@@ -399,7 +421,7 @@ run_power_on(_Signal, [], _State) ->
 
 add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
     case proplists:get_value(channel,Output,0) of
-	Chan when is_integer(Chan), Chan > 0, Chan =< 254 -> 
+	Chan when is_integer(Chan), Chan > 0, Chan =< 254 ->
 	    lager:debug("add output id=~.16B, chan=~w id=~.16B, rchan=~w",
 		   [State#state.nodeid, Chan, Rid, Rchan]),
 	    Value = (Rid bsl 8) bor Rchan,
@@ -414,7 +436,7 @@ add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
 	    add_outputs(Flags, Rid, Rchan, State)
     end;
 add_outputs([_|Flags], Rid, Rchan, State) ->
-    add_outputs(Flags, Rid, Rchan, State);    
+    add_outputs(Flags, Rid, Rchan, State);
 add_outputs([], _Rid, _Rchan, _State) ->
     ok.
 
@@ -424,7 +446,7 @@ make_self(NodeID) ->
        true ->
 	    (2#0011 bsl 9) bor (NodeID band 16#7f)
     end.
-    
+
 
 %% handle "distribution" messages when match
 run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
@@ -446,8 +468,8 @@ run_transmit_(_Signal, []) ->
 
 match_pattern(Sig, Pat) when is_record(Sig, hex_signal),
 			     is_record(Pat, hex_pattern) ->
-    case match_value(Pat#hex_pattern.id,Sig#hex_signal.id) andalso 
-	match_value(Pat#hex_pattern.chan,Sig#hex_signal.chan) andalso 
+    case match_value(Pat#hex_pattern.id,Sig#hex_signal.id) andalso
+	match_value(Pat#hex_pattern.chan,Sig#hex_signal.chan) andalso
 	match_value(Pat#hex_pattern.type, Sig#hex_signal.type) of
 	true ->
 	    case match_value(Pat#hex_pattern.value,Sig#hex_signal.value) of
@@ -470,13 +492,14 @@ match_value(_, _) -> false.
 
 input(I, Value) when is_integer(I); is_atom(I) ->
     lager:debug("input ~w ~w", [I, Value]),
+    %% io:format("hex_server: INPUT ~w ~p\n", [I, Value]),
     try ets:lookup(?TABLE, {input,I}) of
 	[] ->
 	    lager:warning("hex_input ~w not running", [I]),
 	    ignore;
 	[{_,Fsm}] ->
 	    gen_fsm:send_event(Fsm, Value)
-    catch 
+    catch
 	error:badarg ->
 	    lager:warning("hex_server not running", []),
 	    ignore
@@ -485,8 +508,9 @@ input(I, Value) when is_integer(I); is_atom(I) ->
 output(Channel,Target,Value={_Type,_,_}) when
       is_atom(Target), is_integer(Channel), Channel >= 1, Channel =< 254 ->
     lager:debug("output ~w:~s ~w", [Channel,Target,Value]),
+    %% io:format("hex_server: OUTPUT  ~w:~s ~p\n", [Channel,Target,Value]),
     try ets:lookup(?TABLE, {output,Channel}) of
-	[] -> 
+	[] ->
 	    lager:warning("output ~w not running", [Channel]),
 	    ignore;
 	[{_,Fsm}] ->

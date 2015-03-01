@@ -229,9 +229,9 @@ pattern([]) -> [].
 
 %% The nodeid may or may not have the extended flag...
 hex_self() ->
-    case application:get_env(hex, options) of
-	undefined -> 0;
-	{ok,Options} -> proplists:get_value(nodeid,Options,0)
+    case application:get_all_env(hex) of
+	[] -> 0;
+	Options -> proplists:get_value(nodeid,Options,0)
     end.
 
 %% translate function part of COB    

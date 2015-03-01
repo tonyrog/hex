@@ -22,15 +22,22 @@
 
 -module(hex).
 
--export([start/0]).
+-export([start/0, debug/0]).
 -export([start_all/1]).
 -export([auto_join/1, join_async/1, join/1]).
 -export([validate_flags/2]).
 -export([text_expand/2]).
+-export([is_string/1]).
 -export([pp_yang/1]).
 -export([save_yang/2]).
 
 -include("../include/hex.hrl").
+
+debug() ->
+    start_all(hex),
+    start_all(ale),
+    ale:debug_gl(hex_output).
+
 
 start() ->
     start_all(hex).
@@ -58,7 +65,7 @@ each_application_([], Started) ->
 
 %%
 %% Plugins normally calls join from the server init functions
-%% to register as a live plugin 
+%% to register as a live plugin
 %%
 auto_join(Name) when is_atom(Name) ->
     case application:get_all_env(hex) of
@@ -115,7 +122,7 @@ text_expand_([], Acc, _Env) ->
 
 text_expand_collect_([$)|Text], Var, _Pre, shell, Acc, Env) ->
     case os:getenv(rev_variable(Var)) of
-	false -> 
+	false ->
 	    text_expand_(Text, Acc, Env);
 	Value ->
 	    Acc1 = lists:reverse(Value, Acc),
@@ -125,7 +132,7 @@ text_expand_collect_([$/|Text], Var, _Pre, lib, Acc, Env) ->
     try erlang:list_to_existing_atom(rev_variable(Var)) of
 	App ->
 	    case code:lib_dir(App) of
-		{error,_} -> 
+		{error,_} ->
 		    text_expand_(Text, Acc, Env);
 		Value ->
 		    Acc1 = lists:reverse(Value, Acc),
@@ -139,7 +146,7 @@ text_expand_collect_([$}|Text], Var, _Pre, env, Acc, Env) ->
     try erlang:list_to_existing_atom(rev_variable(Var)) of
 	Key ->
 	    case lists:keyfind(Key, 1, Env) of
-		false -> 
+		false ->
 		    text_expand_(Text, Acc, Env);
 		{_,Val} ->
 		    Value = lists:flatten(io_lib:format("~w", [Val])),
@@ -166,7 +173,7 @@ text_expand_collect_([], Var, Pre, _Shell, Acc, Env) ->
 
 rev_variable(Var) ->
     trim_hd(lists:reverse(trim_hd(Var))).
-    
+
 trim_hd([$\s|Cs]) -> trim_hd(Cs);
 trim_hd([$\t|Cs]) -> trim_hd(Cs);
 trim_hd(Cs) -> Cs.
@@ -183,7 +190,7 @@ trim_hd(Cs) -> Cs.
 %%     {badarg,Key} ]
 %%
 validate_flags(Options, Spec) ->
-    case validate_flags_(Options, Spec, []) of 
+    case validate_flags_(Options, Spec, []) of
 	ok ->
 	    validate_spec_(Spec, Options, []);
 	{error,Error} ->
@@ -238,7 +245,10 @@ validate_flag({Key,Value}, Spec) ->
 	    validate_choice(Key, Value, Stmts);
 	false ->
 	    {unknown,Key}
-    end.
+    end;
+validate_flag(_Value, _Spec) ->
+    {error,badarg}.
+
 
 validate_choice(Key, Value, Stmts) ->
     lager:debug("validate_choice: ~p, ~p, ~p", [Key, Value, Stmts]),
@@ -299,9 +309,9 @@ validate_list(_Key, Value, Stmts) ->
 	    end
     end.
 
-    
-    
-    
+
+
+
 
 -define(r(Min,Max), {range,[{(Min),(Max)}],[]}).
 
@@ -381,12 +391,12 @@ validate_value(Value, anyxml, _Tas) ->
 validate_value(_Value, 'hex:rfc822', _Tas) ->  %% fixme!
     %% validate email address
     ok;
-validate_value(Value, 'yang:ip-address', _Tas) when is_tuple(Value)-> 
+validate_value(Value, 'yang:ip-address', _Tas) when is_tuple(Value)->
     case inet:ntoa(Value) of
 	Address when is_list(Address) -> ok;
 	{error, einval} -> badarg
     end;
-validate_value(Value, 'yang:ip-address', _Tas) when is_list(Value)-> 
+validate_value(Value, 'yang:ip-address', _Tas) when is_list(Value)->
     case inet_parse:address(Value) of
 	{ok, _Address} -> ok;
 	{error, einval} -> badarg
@@ -454,18 +464,18 @@ validate_enum(Value, [{enum,Name,_As}|List]) ->
     if Value =:= Name -> ok;
        true -> validate_enum(Value, List)
     end;
-validate_enum(Value, [_|List]) ->       
+validate_enum(Value, [_|List]) ->
     validate_enum(Value, List);
-validate_enum(_Value, []) -> 
+validate_enum(_Value, []) ->
     badarg.
 
 validate_bit(Value, [{bit,Name,_As}|List]) ->
     if Value =:= Name -> ok;
        true -> validate_bit(Value, List)
     end;
-validate_bit(Value, [_|List]) ->       
+validate_bit(Value, [_|List]) ->
     validate_bit(Value, List);
-validate_bit(_Value, []) -> 
+validate_bit(_Value, []) ->
     badarg.
 
 error_bits(Tas) ->
@@ -493,22 +503,22 @@ save_yang(File, App) ->
 %% pretty format a spec as yang container
 pp_yang(hex_config) ->
     Conf = hex_config:config_spec(),
-    Yang = {module, hex_config, 
+    Yang = {module, hex_config,
 	    [{namespace, "http://rogvall.se/hex", []},
 	     {prefix, "hex", []},
 	     Conf]},
     pp_yang(Yang);
-    
+
 pp_yang(hex_input) ->
     Conf = hex_input:event_spec(),
-    Yang = {module, hex_input, 
+    Yang = {module, hex_input,
 	    [{namespace, "http://rogvall.se/hex", []},
 	     {prefix, "hex", []},
 	     {container, config, Conf}]},
     pp_yang(Yang);
 pp_yang(hex_output) ->
     Conf = hex_output:event_spec(),
-    Yang = {module, hex_output, 
+    Yang = {module, hex_output,
 	    [{namespace, "http://rogvall.se/hex", []},
 	     {prefix, "hex", []},
 	     {container, config, Conf}]},
@@ -532,7 +542,7 @@ pp_yang(Ident, {Tag,Value,Sub}) ->
      pp_yang_list(Ident, Sub)].
 
 pp_yang_list(_Ident,[]) -> ";\n";
-pp_yang_list(Ident,Spec) -> 
+pp_yang_list(Ident,Spec) ->
     [" {\n", [ pp_yang(["  ",Ident], S) || S <- Spec ], Ident, "}\n"].
 
 yang_spec(App) ->
@@ -556,4 +566,3 @@ pp_yang_range_elem(Value) ->io_lib:format("~w", [Value]).
 pp_yang_range([E]) -> pp_yang_range_elem(E);
 pp_yang_range([E|Es]) -> [pp_yang_range_elem(E),"|",pp_yang_range(Es)];
 pp_yang_range([]) -> "".
-

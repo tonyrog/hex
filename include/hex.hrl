@@ -34,14 +34,14 @@
 -define(HEX_OUTPUT_DEL,     16#2805).  %% Delete output interface
 -define(HEX_OUTPUT_ACTIVE,  16#2806).  %% Active/Deactivate signal
 
--type base_pattern() :: 
+-type base_pattern() ::
 	uint32() |
 	{mask,Mask::uint32(),Match::uint32()} |
 	{range,Low::integer(),High::integer()} |
 	{'not',base_pattern()} |
 	{'and',base_pattern(),base_pattern()} |
 	{'or',base_pattern(),base_pattern()}.
-			
+
 -type pattern() :: base_pattern() | [base_pattern()].
 -type uint1() :: 0..1.
 -type uint8() :: 0..16#ff.
@@ -67,7 +67,7 @@
 -define(is_int8(X), ( ( ((X) >= -16#80) andalso ((X) =< 16#7f)) )).
 -define(is_int16(X), ( ( ((X) >= -16#8000) andalso ((X) =< 16#7fff)) )).
 -define(is_int32(X), ( ( ((X) >= -16#80000000) andalso ((X) =< 16#7fffffff)) )).
--define(is_int64(X), ( ( ((X) >= -16#8000000000000000) 
+-define(is_int64(X), ( ( ((X) >= -16#8000000000000000)
 			 andalso ((X) =< 16#7fffffffffffffff)) )).
 -define(is_timeout(T), ?is_uint32(T)).
 
@@ -95,8 +95,8 @@
 	  signal :: #hex_pattern{},     %% input match pattern
 	  flags :: [{atom(),term()}]    %% input state flags
 	}).
-	  
--record(hex_event, 
+
+-record(hex_event,
 	{
 	  label :: atom() | integer(),
 	  app :: atom(),               %% application name of plugin
@@ -116,5 +116,10 @@
 	  label :: atom() | integer(),
 	  app   :: atom(),      %% signal transmittion app
 	  flags = [] :: [{atom(),term()}],
-	  signal :: #hex_pattern{}     %% signal to match	  
+	  signal :: #hex_pattern{}     %% signal to match
 	}).
+
+-type hex_config() :: #hex_transmit{} |
+		      #hex_event{} |
+		      #hex_input{} |
+		      #hex_output{} .
