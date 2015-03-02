@@ -814,8 +814,8 @@ do_activate(Event, State) ->
 
 do_reactivate(_Event, State) ->
     ?verbose("DO_REACTIVATE",[]),
-    %% state_delay(init, State).
-    state_rampup(init, State).
+    state_delay(init, State).
+    %% state_rampup(init, State).
 
 do_deactivate(_Event, State) ->
     ?verbose("DO_DEACTIVATE",[]),
