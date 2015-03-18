@@ -168,7 +168,7 @@ event_spec() ->
 		       ]},
      {leaf, high, [{type,uint32, []},
 			{default, 16#ffff, []},
-			{description, "same high value level", []}
+			{description, "set high value level", []}
 			]},
      {leaf, value, [{type,uint32, []},
 		    {default, 0, []},
