@@ -10,10 +10,12 @@
 -export([scan/1, parse/1, parse_tokens/1]).
 
 -export([new/0]).
+-export([tick/1]).
 -export([add_expr/2, add_variable/2, add_variables/2]).
 -export([eval/1]).
 -export([set_value/3, set_values/2]).
--export([value/2, tick/2]).
+-export([value/2, previous/2, tick/2]).
+-export([is_changed/2, is_updated/2]).
 -export([dump/1]).
 
 %% -define(dbg(F,A), io:format((F),(A))).
@@ -45,14 +47,16 @@
 	  %% queue set of variables already in queue
 	  queue_set = sets:new() :: ?SET_T,
 	  %% queue of Ci rules to be executed
-	  queue = queue:new() :: ?QUEUE_T
+	  queue = queue:new() :: ?QUEUE_T,
+	  %% preserved value
+	  new_prev = dict:new() :: ?DICT_T
 	}).
 
 %%
 %% Create a new core
 %%
 new() ->
-    #core{}.
+    #core{ }.
 
 %%
 %% Simple parse using erlang expressions
@@ -321,11 +325,58 @@ value(Var, Core) when is_atom(Var), is_record(Core, core) ->
 value(Vi, Core) when is_integer(Vi), is_record(Core, core) ->
     dict:fetch(Vi, Core#core.values).
 
-%% get current tick
+%% get previous value (before last eval)
+previous({const,Val}, _Core) ->
+    Val;
+previous(Var, Core) when is_atom(Var), is_record(Core, core) ->
+    case dict:find(Var, Core#core.expr) of
+	error -> 0;
+	{ok,Vi} -> prev_(Vi, Core#core.prev)
+    end;
+previous(Vi, Core) when is_integer(Vi), is_record(Core, core) ->
+    prev_(Vi, Core#core.prev).
+
+%% get current tick (last tick)
+-spec tick(Core::#core{}) -> integer().
+
+tick(Core) when is_record(Core, core) ->
+    Core#core.tick-1.
+
+%% get variable current tick
 -spec tick(Var::variable(), Core::#core{}) -> integer().
 
 tick(Var, Core) when is_atom(Var), is_record(Core, core) ->
-    dict:fetch(Var, Core#core.ticks).
+    case dict:find(Var, Core#core.expr) of
+	error -> -1;
+	{ok,Vi} -> dict:fetch(Vi, Core#core.ticks)
+    end.
+
+
+-spec is_changed(Var::variable(), Core::#core{}) -> boolean().
+is_changed(Var, Core) when is_atom(Var), is_record(Core, core) ->
+    case dict:find(Var, Core#core.expr) of
+	error -> false;
+	{ok,Vi} -> is_changed_(Vi, Core)
+    end;
+is_changed(Vi, Core) when is_integer(Vi), is_record(Core, core) ->
+    is_changed_(Vi, Core).
+
+is_changed_(Vi, Core) ->
+    prev_(Vi,Core#core.prev) =/= dict:fetch(Vi, Core#core.values).
+
+-spec is_updated(Var::variable(), Core::#core{}) -> boolean().
+is_updated(Var, Core) when is_atom(Var), is_record(Core, core) ->
+    case dict:find(Var, Core#core.expr) of
+	error -> false;
+	{ok,Vi} -> is_updated_(Vi, Core)
+    end;
+is_updated(Vi, Core) when is_integer(Vi), is_record(Core, core) ->
+    is_updated_(Vi, Core).
+
+is_updated_(Vi, Core) ->
+    %% #core.ticks is already updated after an eval
+    tick_(Vi,Core#core.ticks) =/= (Core#core.tick-1).
+
 
 %% set value and enqueue dependecies
 -spec set_value(Var::variable(), Value::integer(), Core::#core{}) ->
@@ -388,7 +439,7 @@ eval(Core) ->
     eval_enqueue_(RefList,
 		  Core#core.queue, Core#core.queue_set,
 		  Core#core.values, Core#core.ticks,
-		  Core#core.tick, Core).
+		  Core#core.tick, Core#core { prev = Core#core.new_prev } ).
 
 eval_queue(Queue, QSet, Values, Ticks, CurrentTick, Core) ->
     case queue:out(Queue) of
@@ -444,8 +495,9 @@ eval_queue(Queue, QSet, Values, Ticks, CurrentTick, Core) ->
 	{empty, Queue1} ->
 	    Core#core { queue = Queue1, queue_set = sets:new(),
 			tick = CurrentTick+1,
-			prev = Values, %% previous values in next round
-			ticks = Ticks, values = Values }
+			ticks = Ticks, values = Values,
+			new_prev = Values  %% presrve values to next round
+		      }
     end.
 
 eval_enqueue(Xi,Queue,QSet,Values,Ticks,CurrentTick,Core) ->

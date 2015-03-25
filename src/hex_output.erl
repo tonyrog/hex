@@ -95,7 +95,7 @@
 	  inhibited  = false :: boolean(),    %% disallow activation
 
 	  out_name  = out :: atom(),          %% name of output variable
-	  ena_name  = ena :: atom(),          %% enabled output variabled
+	  ena_name  = ena :: atom(),          %% enabled output variable
 
 	  enable_value = 0,                   %% last enable value
 	  active_value = 0,                   %% last active value
@@ -514,7 +514,7 @@ state_on(_Event, S) ->
 %% by sending an digital 0 signal
 state_delay(init, State) ->
     ?STATE(delay),
-    Time = ?VALUE(State, delay),
+    Time = ?VALUE(State,delay),
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, delay),
 	    State1 = State#state { tref = TRef },
@@ -544,12 +544,12 @@ state_delay(_Event, State) ->
 %% Ramping up output over rampup time milliseconds
 state_rampup(init, State) ->
     ?STATE(rampup),
-    Time = ?VALUE(State, rampup),
+    Time = ?VALUE(State,rampup),
     if Time > 0 ->
 	    Tm = State#state.ramp_step,
-	    A0 = ?VALUE(State, low),
-	    A1 = ?VALUE(State, high),
-	    A = ?VALUE(State,output),
+	    A0 = ?VALUE(State,low),
+	    A1 = ?VALUE(State,high),
+	    A = clamp(?VALUE(State,output),A0,A1),
 	    %% A = hex_core:value(State#state.out_name, State#state.core),
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
@@ -574,8 +574,8 @@ state_rampup(_Event={timeout,TRef,{delta,Td}},State)
 	    {next_state, state_rampup, State#state { tref=undefined} };
 	Tr ->
 	    Time = ?VALUE(State, rampup),
-	    A0 = ?VALUE(State, low),
-	    A1 = ?VALUE(State, high),
+	    A0 = ?VALUE(State,low),
+	    A1 = ?VALUE(State,high),
 	    T = (Time - Tr)/Time,
 	    A = trunc((A1-A0)*T + A0),
 	    ?verbose("rampup: T=~w A=~w", [T, A]),
@@ -616,7 +616,7 @@ state_rampup(_Event, S) ->
 
 state_sustain(init, State) ->
     ?STATE(sustain),
-    Time = ?VALUE(State, sustain),
+    Time = ?VALUE(State,sustain),
     State1 = do_analog_value(max,State),
     if Time > 0 ->
 	    lager:debug("action in state_sustain init\n"),
@@ -655,7 +655,7 @@ state_sustain(_Event, S) ->
 %% deactivation delay
 state_deact(init, State) ->
     ?STATE(deact),
-    Time = ?VALUE(State, deact),
+    Time = ?VALUE(State,deact),
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, deact),
 	    State1 = State#state { tref = TRef },
@@ -692,13 +692,12 @@ state_deact(_Event, S) ->
 %% Ramping down output over rampup time milliseconds
 state_rampdown(init, State) ->
     ?STATE(rampdown),
-    Time = ?VALUE(State, rampdown),
+    Time = ?VALUE(State,rampdown),
     if Time > 0 ->
 	    Tm = State#state.ramp_step,
 	    A0 = ?VALUE(State, low),
 	    A1 = ?VALUE(State, high),
-	    A = ?VALUE(State,output),
-	    %% A = hex_core:value(State#state.out_name, State#state.core),
+	    A = clamp(?VALUE(State,output),A0,A1),
 	    Ad = abs(A1 - A0),
 	    Td0 = trunc(Time*(1/Ad)),
 	    Td = max(Tm, Td0),
@@ -721,9 +720,9 @@ state_rampdown(_Event={timeout,TRef,{delta,Td}},State)
 	false ->
 	    {next_state, state_rampdown, State#state {tref=undefined} };
 	Tr ->
-	    Time = ?VALUE(State, rampdown),
-	    A0 = ?VALUE(State, low),
-	    A1 = ?VALUE(State, high),
+	    Time = ?VALUE(State,rampdown),
+	    A0 = ?VALUE(State,low),
+	    A1 = ?VALUE(State,high),
 	    T = (Time-Tr)/Time,
 	    A = trunc((A0-A1)*T + A1),
 	    ?verbose("rampdown: T=~w A=~w", [T, A]),
@@ -768,7 +767,7 @@ state_rampdown(_Event, State) ->
 state_wait(init, State) ->
     ?STATE(wait),
     State1 = do_analog_value(min,State),
-    WaitTime = ?VALUE(State1, wait),
+    WaitTime = ?VALUE(State1,wait),
     if State1#state.enable_value =:= 0; State1#state.counter =:= 0 ->
 	    state_off(init, State1);
        State1#state.deactivate ->
@@ -808,7 +807,7 @@ state_wait(_Event, State) ->
 
 do_activate(Event, State) ->
     ?verbose("DO_ACTIVATE",[]),
-    Repeat = ?VALUE(State, repeat),
+    Repeat = ?VALUE(State,repeat),
     State1 = State#state { counter = Repeat },
     do_reactivate(Event, State1).
 
@@ -1106,6 +1105,12 @@ do_target(_Type, Name, _Vo, Value, Src, State) ->
     lager:debug("do_target: ~s = ~w src=~w", [Name,Value,Src]),
     {_,Core1} = hex_core:set_value(Name,Value,State#state.core),
     Core2 = hex_core:eval(Core1),
+    lager:debug("do_target Eval ~w: ~w, tick:~w, value:~w, prev:~w", 
+		[hex_core:tick(Core2),
+		 Name,
+		 hex_core:tick(Name,Core2),
+		 hex_core:value(Name,Core2),
+		 hex_core:previous(Name,Core2)]),
     %% Value2 = hex_core:value(Vo,Core2),
     Active =
 	case State#state.active_value of
@@ -1144,9 +1149,15 @@ do_target(_Type, Name, _Vo, Value, Src, State) ->
     end.
 
 target_env(State) ->
+    Core = State#state.core,
     dict:fold(fun(Ti,To,Acc) ->
-		      Val = hex_core:value(To,State#state.core),
-		      [{Ti,Val}|Acc]
+		      case hex_core:is_changed(To,Core) of
+			  true ->
+			      Val = hex_core:value(To,Core),
+			      [{Ti,Val}|Acc];
+			  false ->
+			      Acc
+		      end
 	      end, [], State#state.targets).
 
 do_enabled(Value, State) ->
@@ -1154,8 +1165,9 @@ do_enabled(Value, State) ->
 				 {State#state.ena_name,Value}],
 				State#state.core),
     Core2 = hex_core:eval(Core1),
+    lager:debug("do_enabled Eval"),
     State1 = State#state { core=Core2 },
-    Output = ?VALUE(State1, output),
+    Output = ?VALUE(State1,output),
     feedback(?HEX_DIGITAL, Output, State1),
     State1.
 
@@ -1178,6 +1190,7 @@ do_output(Value, State) ->
 	    {_,Core1} = hex_core:set_value(State#state.out_name, Value,
 					   State#state.core),
 	    Core2 = hex_core:eval(Core1),
+	    lager:debug("do_output Eval"),
 	    Output = ?CORE_VALUE(State,Core2,output),
 	    feedback(?HEX_ANALOG, Output, State),
 	    Env = [{State#state.out_name, Output},
@@ -1188,7 +1201,7 @@ do_output(Value, State) ->
     end.
 
 start_inhibation(State) when not State#state.inhibited ->
-    Inhibit = ?VALUE(State, inhibit),
+    Inhibit = ?VALUE(State,inhibit),
     if Inhibit > 0 ->
 	    erlang:start_timer(Inhibit, self(), inhibit_done),
 	    ?verbose("inhibit started for: ~w ms", [Inhibit]),
@@ -1204,6 +1217,10 @@ cancel_timer(undefined) ->
     0;
 cancel_timer(TRef) ->
     gen_fsm:cancel_timer(TRef).
+
+clamp(V, Min, _Max) when V < Min -> Min;
+clamp(V, _Min, Max) when V > Max -> Max;
+clamp(V, _Min, _Max) -> V.
 
 
 get_options([nodeid|Ks], State, Acc) ->
@@ -1248,13 +1265,13 @@ transmit_active(Active, State) ->
     hex_server:transmit(Signal, Env).
 
 feedback_signal(Signal, Env, State) ->
-    case ?VALUE(State, feedback) of
+    case ?VALUE(State,feedback) of
 	0 -> ok;
 	_ -> hex_server:event(Signal, Env)
     end.
 
 transmit_signal(Signal, Env, State) ->
-    case ?VALUE(State, feedback) of
+    case ?VALUE(State,feedback) of
 	0 -> ok;
 	_ -> hex_server:transmit(Signal, Env)
     end.
@@ -1271,7 +1288,7 @@ feedback(Type, Value, State) ->
     transmit_signal(Signal, Env, State).
 
 action(State) ->
-    action(State#state.env, State).
+    action(State#state.env, State#state { env=[]} ).
 
 action(Env, State) ->
     lager:debug("action env=~w\n", [Env]),
@@ -1293,11 +1310,11 @@ action_list([], _Env, State) ->
 execute({App, AppFlags}, Env) ->
     try App:output(AppFlags, Env) of
 	Result ->
-	    lager:debug("execute ~p = ~p", [{App,AppFlags}, Result]),
+	    lager:debug("execute ~p = ~p", [{App,AppFlags,Env}, Result]),
 	    Result
     catch
 	error:Reason ->
-	    lager:error("execute ~p = ~p", [{App,AppFlags}, {error,Reason}]),
+	    lager:error("execute ~p = ~p", [{App,AppFlags,Env},{error,Reason}]),
 	    {error,Reason}
     end.
 
