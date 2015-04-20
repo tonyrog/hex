@@ -27,7 +27,8 @@
 
 %% API
 -export([start_link/1]).
--export([reload/0, load/1]).
+-export([reload/0, load/1, dump/0]).
+-export([subscribe/1, unsubscribe/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -44,17 +45,44 @@
 
 -type config() :: term().
 
+-record(map_item,
+	{
+	  label         :: integer(),          
+	  id            :: uint32(),  %% remote id
+	  chan          :: uint8()   %% remote channel number
+	}).
+
+-record(int_event,
+	{
+	  label          :: integer(),          
+	  ref            :: reference(),
+	  app            :: atom(),
+	  flags          :: [{Key::atom(), Value::term()}],
+	  signal         :: #hex_signal{},
+	  alarm=0        :: integer(), %% alarm id (0=ok)
+	  active=false   :: boolean()  %% status of id:chan 
+	}).
+
+-record(subscriber,
+	{
+	  pid  :: pid(),
+	  mon  :: reference(),
+	  options=[] :: [{Key::atom(), Value::term()}]
+	}).
+		  
 -record(state, {
 	  config = default :: default | {file,string()} | [config()],
 	  nodeid = 0 :: integer(),
 	  tab :: ets:tab(),
 	  out_list = []    :: [{Label::integer(), Pid::pid()}],
 	  in_list  = []    :: [{Label::integer(), Pid::pid()}],
-	  evt_list = []    :: [{Label::integer(), Ref::reference()}],
+	  evt_list = []    :: [#int_event{}],
+	  map = []         :: [#map_item{}],
 	  transmit_rules = []  :: [#hex_transmit{}],
 	  input_rules = [] :: [#hex_input{}],
 	  plugin_up = []   :: [{App::atom(), Mon::reference()}],
-	  plugin_down = [] :: [App::atom()]
+	  plugin_down = [] :: [App::atom()],
+	  subs = []        :: [#subscriber{}]
 	 }).
 
 %%%===================================================================
@@ -65,8 +93,16 @@ reload() ->
     gen_server:call(?SERVER, reload).
 
 load(File) ->
-    gen_server:call(?SERVER, {load,File}).
+    gen_server:call(?SERVER, {load, File}).
 
+dump() ->
+    gen_server:call(?SERVER, dump).
+
+subscribe(Options) ->
+    gen_server:call(?SERVER, {subscribe, self(), Options}).
+
+unsubscribe() ->
+    gen_server:call(?SERVER, {unsubscribe, self()}).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -157,6 +193,26 @@ handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid),
     PluginUp = [{AppName,AppMon} | State#state.plugin_up],
     PluginDown = lists:delete(AppName, State#state.plugin_down),
     {reply, ok, State#state { plugin_up = PluginUp, plugin_down = PluginDown }};
+handle_call({subscribe, Pid, Options}, _From, State=#state {subs = Subs}) ->
+    case lists:keyfind(Pid, #subscriber.pid, Subs) of
+	true ->
+	    {reply, ok, State};
+	false ->
+	    Mon = erlang:monitor(process, Pid),
+	    Sub = #subscriber {pid = Pid, mon = Mon, options = Options},
+	    {reply, ok, State#state {subs = [Sub | Subs]}}
+    end;
+handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
+    case lists:keytake(Pid, #subscriber.pid, Subs) of
+	false ->
+	    {reply, ok, State};
+	{value, #subscriber {mon = Mon}, NewSubs} ->
+	    erlang:demonitor(Mon, [flush]),
+	    {reply, ok, State#state {subs = NewSubs}}
+    end;
+handle_call(dump, _From, State) ->
+    io:format("State ~p", [State]),
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -174,8 +230,8 @@ handle_call(_Request, _From, State) ->
 handle_cast({event,Signal=#hex_signal{}}, State) ->
     %% io:format("handle_cast:EVENT ~p\n", [Signal]),
     lager:debug("input event: ~p\n", [Signal]),
-    run_event(Signal, State#state.input_rules, State),
-    {noreply, State};
+    NewState = run_event(Signal, State#state.input_rules, State),
+    {noreply, NewState};
 
 handle_cast({transmit,Signal=#hex_signal{}}, State) ->
     lager:debug("transmit event: ~p\n", [Signal]),
@@ -220,12 +276,19 @@ handle_info({init_plugin, AppName}, State) ->
     %% reload all events for Plugin AppName
     {noreply, State};
 
-handle_info({'DOWN',Ref,process,_Pid,_Reason}, State) ->
+handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
     case lists:keytake(Ref, 2, State#state.plugin_up) of
 	false ->
-	    {noreply, State};
+	    case lists:keytake(Ref, #subscriber.mon, State#state.subs) of
+		false ->
+		    {noreply, State};
+		{value, #subscriber {pid = Pid}, NewSubs} ->
+		    lager:warning("subscriber DOWN: ~s reason=~p", 
+				  [Pid,_Reason]),
+		    {noreply, State#state { subs = NewSubs}}
+	    end;
 	{value,{App,_Ref},PluginUp} ->
-	    lager:warning("pugin DOWN: ~s reason=~p", [App,_Reason]),
+	    lager:warning("plugin DOWN: ~s reason=~p", [App,_Reason]),
 	    PluginDown = [App|State#state.plugin_down],
 	    {noreply, State#state { plugin_up   = PluginUp,
 				    plugin_down = PluginDown }}
@@ -328,7 +391,9 @@ start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
 	    lager:debug("add_event: ~p ~p", [App,Flags]),
 	    {ok,Ref} = App:add_event(Flags, Signal, ?MODULE),
 	    lager:debug("event ~w started ~w", [L, Ref]),
-	    EvtList = [{L,Ref} | State#state.evt_list],
+	    EvtList = [#int_event{ label = L, ref = Ref, app = App,
+				   flags = Flags, signal = Signal} | 
+		       State#state.evt_list],
 	    start_events(Evt, State#state { evt_list = EvtList });
 	_Error ->
 	    start_events(Evt, State)
@@ -376,11 +441,14 @@ init_plugin(App, Dir, Flags) ->
 run_event(Signal, Rules, State) when is_record(Signal, hex_signal) ->
     run_event_(Signal, Rules, State),
     case Signal#hex_signal.type of
-	?HEX_POWER_ON  -> run_power_on(Signal, Rules, State);
+	?HEX_POWER_ON     -> run_power_on(Signal, Rules, State);
+	?HEX_OUTPUT_ADD   -> run_output_add(Signal, State);
+        ?HEX_OUTPUT_DEL   -> run_output_del(Signal, State);
+        ?HEX_OUTPUT_ACTIVE  -> run_output_act(Signal, State);
 	%% ?HEX_POWER_OFF -> run_power_off(Signal, Rules, State);
 	%% ?HEX_WAKEUP    -> run_wakeup(Signal, Rules, State);
-	%% ?HEX_ALARM     -> run_alarm(Signal, Rules, State);
-	_ -> ok
+	?HEX_ALARM        -> run_alarm(Signal, State);
+	_ -> State
     end.
 
 run_event_(Signal, [Rule|Rules], State) ->
@@ -416,8 +484,8 @@ run_power_on(Signal, [Rule|Rules], State) ->
        true ->
 	    run_power_on(Signal, Rules, State)
     end;
-run_power_on(_Signal, [], _State) ->
-    ok.
+run_power_on(_Signal, [], State) ->
+    State.
 
 add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
     case proplists:get_value(channel,Output,0) of
@@ -441,12 +509,176 @@ add_outputs([], _Rid, _Rchan, _State) ->
     ok.
 
 make_self(NodeID) ->
-    if NodeID band 16#02000000 =/= 0 ->
+    if NodeID band ?HEX_COBID_EXT =/= 0 ->
 	    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff);
        true ->
 	    (2#0011 bsl 9) bor (NodeID band 16#7f)
     end.
 
+
+run_output_add(Signal=#hex_signal {value = Value}, 
+	       State=#state {evt_list = EvtList}) ->
+    lager:debug("run_output_add: ~p", [Signal]),
+    {Id, Chan} = value2nid(Value),
+    lager:debug("run_output_add: ~.16B ~p", [Id, Chan]),
+    if Chan >=1, Chan =< 254 -> 
+	    run_output_add(Id, Chan, Signal, EvtList, State);
+       true ->
+	    State
+    end.
+
+run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan}, 
+	       [#int_event {label = Label, signal = S} | Events], 
+	       State=#state{map = Map}) ->
+    if is_integer(S#hex_signal.id) ->
+	    SigNodeId = S#hex_signal.id band 
+		(?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+	    if Id =:= SigNodeId,
+	       LChan =:= S#hex_signal.chan ->
+		    case is_mapped(Map, Label, RId, RChan) of
+			true ->
+			    run_output_add(Id, LChan, Signal, Events, State);
+			false ->
+			    MapItem = #map_item{label = Label,
+						id = RId,
+						chan = RChan},
+			    lager:debug("run_output_add: item ~p", [MapItem]),
+			    run_output_add(Id, LChan, Signal, Events, 
+					   State#state {map = [MapItem | Map]})
+		    end;
+	       true ->
+		    run_output_add(Id, LChan, Signal, Events, State)
+	    end;
+       true ->
+	    run_output_add(Id, LChan, Signal, Events, State)
+    end;
+run_output_add(_Id, _LChan, _Signal, [], State) ->
+    State.
+
+
+run_output_del(Signal=#hex_signal {value = Value}, 
+	       State=#state {evt_list = EvtList}) ->
+    lager:debug("run_output_del: ~p", [Signal]),
+    {Id, Chan} = value2nid(Value),
+    lager:debug("run_output_del: ~.16B ~p", [Id, Chan]),
+    if Chan >=1, Chan =< 254 -> 
+	    run_output_del(Id, Chan, Signal, EvtList, State);
+       true ->
+	    State
+    end.
+
+run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan}, 
+	       [#int_event {label = Label, signal = S} | Events], 
+	       State=#state{map = Map}) ->
+    if is_integer(S#hex_signal.id) ->
+	    SigNodeId = S#hex_signal.id band 
+		(?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+	    
+	    if Id =:= SigNodeId,
+	       LChan =:= S#hex_signal.chan ->
+		    case is_mapped(Map, Label, RId, RChan) of
+			true ->
+			    lager:debug("run_output_del: item ~p, ~p, ~p", 
+					[Label, RId, RChan]),
+			    NewMap = remove_mapped(Label, RId, RChan, Map, []),
+			    run_output_del(Id, LChan, Signal, Events, 
+					   State#state {map = NewMap});
+			false ->
+			    run_output_del(Id, LChan, Signal, Events, State)
+		    end;
+	       true ->
+		    run_output_del(Id, LChan, Signal, Events, State)
+	    end;
+       true ->
+	    run_output_del(Id, LChan, Signal, Events, State)
+    end;
+run_output_del(_Id, _LChan, _Signal, [], State) ->
+    State.
+
+run_output_act(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
+	       State=#state {map = Map}) ->
+    lager:debug("run_output_act: ~p", [Signal]),
+    %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+    run_output_act(Id, Chan, (Value =/= 0), Map, State).
+
+run_output_act(Id, Chan, Active, 
+	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
+	       State=#state{evt_list = EList, subs = Subs}) ->
+    lager:debug("run_output_act: event ~p, active ~p", [Label, Active]),
+    NewElist = event_active(Label, Active, EList, [], Subs),
+    run_output_act(Id, Chan, Active, Map, State#state{evt_list = NewElist});
+run_output_act(Id, Chan, Active, [_MapItem | Map], State) ->
+    run_output_act(Id, Chan, Active, Map, State);
+run_output_act(_Id, _Chan, _Active, [], State) ->
+    State.
+
+event_active(_Label, _Active, [], Acc, _Subs) ->
+    Acc;
+event_active(Label, Active, 
+	     [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
+	     Acc, Subs) ->
+    App:output(Flags, [{output_active, Active}]),
+    inform_subscribers({output_active, Active}, Subs),
+    event_active(Label, Active, Events, [E#int_event {active = Active} | Acc], Subs);
+event_active(Label, Active, [E | Events], Acc, Subs) ->
+    event_active(Label, Active, Events, [E | Acc], Subs).
+
+run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
+	       State=#state {map = Map}) ->
+    lager:debug("run_alarm: ~p", [Signal]),
+    %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+    run_alarm(Id, Chan, Value band 16#ff, Map, State).
+
+run_alarm(Id, Chan, Alarm, 
+	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
+	       State=#state{evt_list = EList, subs = Subs}) ->
+    lager:debug("run_alarm: event ~p, alarm ~p", [Label, Alarm]),
+    NewElist = event_alarm(Label, Alarm, EList, [], Subs),
+    run_alarm(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
+run_alarm(Id, Chan, Alarm, [_MapItem | Map], State) ->
+    run_alarm(Id, Chan, Alarm, Map, State);
+run_alarm(_Id, _Chan, _Alarm, [], State) ->
+    State.
+
+event_alarm(_Label, _Alarm, [], Acc, _Subs) ->
+    Acc;
+event_alarm(Label, Alarm, 
+	    [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
+	    Acc, Subs) ->
+    App:output(Flags, [{alarm, Alarm}]),
+    inform_subscribers({alarm, Alarm}, Subs),
+    event_alarm(Label, Alarm, Events, [E#int_event {alarm = Alarm} | Acc], Subs);
+event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
+    event_alarm(Label, Alarm, Events, [E | Acc], Subs).
+
+inform_subscribers(_Msg, []) ->
+    ok;
+inform_subscribers(Msg, [#subscriber {pid = Pid} | Subs]) ->
+    Pid ! Msg,
+    inform_subscribers(Msg, Subs).
+    
+value2nid(Value) ->
+    Id0 = Value bsr 8,
+    Id  = if Id0 < 127 -> Id0;
+	      true -> Id0 bor ?HEX_COBID_EXT
+	   end,
+    Chan = (Value band 16#ff),
+    {Id, Chan}.
+
+is_mapped([#map_item{label=Label,id=Id,chan=Chan}|_Map],Label,Id,Chan) ->
+    true;
+is_mapped([_|Map],Label,Id,Chan) ->
+    is_mapped(Map,Label,Id,Chan);
+is_mapped([],_Label,_Id,_Chan) ->
+    false.
+
+remove_mapped(_Label,_Id,_Chan,[],Acc) ->
+    Acc;
+remove_mapped(Label,Id,Chan, 
+	      [#map_item{label=Label,id=Id,chan=Chan}|Map],Acc) ->
+    remove_mapped(Label,Id,Chan,Map,Acc);
+remove_mapped(Label,Id,Chan,[MapItem|Map],Acc) ->
+    remove_mapped(Label,Id,Chan,Map,[MapItem|Acc]).
 
 %% handle "distribution" messages when match
 run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->

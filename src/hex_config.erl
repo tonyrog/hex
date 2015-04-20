@@ -207,6 +207,8 @@ pattern(alarm) -> ?HEX_ALARM;
 pattern(output_add) -> ?HEX_OUTPUT_ADD;
 pattern(output_del) -> ?HEX_OUTPUT_DEL;
 pattern(output_active) -> ?HEX_OUTPUT_ACTIVE;
+pattern(alarm_confirm) -> ?HEX_ALARM_CNFRM;
+pattern(alarm_confirm_ack) -> ?HEX_ALARM_CNFRM_ACK;
 pattern(Var) when is_atom(Var) -> Var;
 pattern({xcobid,Func,ID}) when ?is_uint25(ID) ->
     ?COBID_ENTRY_EXTENDED + (func(Func) bsl 25) + ID;
