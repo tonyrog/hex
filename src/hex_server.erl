@@ -29,6 +29,7 @@
 -export([start_link/1]).
 -export([reload/0, load/1, dump/0]).
 -export([subscribe/1, unsubscribe/0]).
+-export([event_list/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -103,6 +104,10 @@ subscribe(Options) ->
 
 unsubscribe() ->
     gen_server:call(?SERVER, {unsubscribe, self()}).
+
+event_list() ->
+    gen_server:call(?SERVER, event_list).
+    
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -210,6 +215,9 @@ handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
 	    erlang:demonitor(Mon, [flush]),
 	    {reply, ok, State#state {subs = NewSubs}}
     end;
+handle_call(event_list, _From, State=#state {evt_list = EList}) ->
+    List = [{E#int_event.label, E#int_event.signal} || E <- EList],
+    {reply, {ok, List}, State};
 handle_call(dump, _From, State) ->
     io:format("State ~p", [State]),
     {reply, ok, State};

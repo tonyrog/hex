@@ -229,6 +229,10 @@ pattern({cobid,self}) ->
 pattern([P|Ps]) -> [pattern(P)|pattern(Ps)];
 pattern([]) -> [].
 
+type(?HEX_DIGITAL) -> digital;
+type(?HEX_ANALOG) -> analog;
+type(?HEX_ENCODER) -> encoder.
+    
 %% The nodeid may or may not have the extended flag...
 hex_self() ->
     case application:get_all_env(hex) of
