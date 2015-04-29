@@ -30,6 +30,7 @@
 -export([is_string/1]).
 -export([pp_yang/1]).
 -export([save_yang/2]).
+-export([subscribe/0, subscribe/1, unsubscribe/0]).
 
 -include("../include/hex.hrl").
 
@@ -92,6 +93,19 @@ join_async(Name) when is_atom(Name) ->
 
 join(Name) when is_atom(Name) ->
     gen_server:call(hex_server, {join,self(),Name}).
+
+%%
+%% Subscribe to alarms and output_active signals received by hex.
+%%
+subscribe(Options) ->
+    hex_server:subscribe(Options).
+
+subscribe() ->
+    hex_server:subscribe([]).
+
+unsubscribe() ->
+    hex_server:unsubscribe().
+
 
 %%
 %% Utility to exand environment "variables" in unicode text

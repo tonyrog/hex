@@ -200,7 +200,7 @@ handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid),
     {reply, ok, State#state { plugin_up = PluginUp, plugin_down = PluginDown }};
 handle_call({subscribe, Pid, Options}, _From, State=#state {subs = Subs}) ->
     case lists:keyfind(Pid, #subscriber.pid, Subs) of
-	true ->
+	S when is_record(S, subscriber) ->
 	    {reply, ok, State};
 	false ->
 	    Mon = erlang:monitor(process, Pid),
@@ -291,7 +291,7 @@ handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
 		false ->
 		    {noreply, State};
 		{value, #subscriber {pid = Pid}, NewSubs} ->
-		    lager:warning("subscriber DOWN: ~s reason=~p", 
+		    lager:warning("subscriber DOWN: ~p reason=~p", 
 				  [Pid,_Reason]),
 		    {noreply, State#state { subs = NewSubs}}
 	    end;
@@ -607,7 +607,7 @@ run_output_act(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
 	       State=#state {map = Map}) ->
     lager:debug("run_output_act: ~p", [Signal]),
     %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
-    run_output_act(Id, Chan, (Value =/= 0), Map, State).
+    run_output_act(Id, Chan, Value, Map, State).
 
 run_output_act(Id, Chan, Active, 
 	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
@@ -626,7 +626,7 @@ event_active(Label, Active,
 	     [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
 	     Acc, Subs) ->
     App:output(Flags, [{output_active, Active}]),
-    inform_subscribers({output_active, Active}, Subs),
+    inform_subscribers({'output-active', [{label, Label}, {value, Active}]}, Subs),
     event_active(Label, Active, Events, [E#int_event {active = Active} | Acc], Subs);
 event_active(Label, Active, [E | Events], Acc, Subs) ->
     event_active(Label, Active, Events, [E | Acc], Subs).
@@ -635,7 +635,7 @@ run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
 	       State=#state {map = Map}) ->
     lager:debug("run_alarm: ~p", [Signal]),
     %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
-    run_alarm(Id, Chan, Value band 16#ff, Map, State).
+    run_alarm(Id, Chan, Value, Map, State).
 
 run_alarm(Id, Chan, Alarm, 
 	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
@@ -654,7 +654,7 @@ event_alarm(Label, Alarm,
 	    [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
 	    Acc, Subs) ->
     App:output(Flags, [{alarm, Alarm}]),
-    inform_subscribers({alarm, Alarm}, Subs),
+    inform_subscribers({alarm, [{label, Label}, {value, Alarm}]}, Subs),
     event_alarm(Label, Alarm, Events, [E#int_event {alarm = Alarm} | Acc], Subs);
 event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
     event_alarm(Label, Alarm, Events, [E | Acc], Subs).
@@ -662,6 +662,7 @@ event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
 inform_subscribers(_Msg, []) ->
     ok;
 inform_subscribers(Msg, [#subscriber {pid = Pid} | Subs]) ->
+    lager:debug("informing ~p of ~p", [Pid, Msg]),
     Pid ! Msg,
     inform_subscribers(Msg, Subs).
     
