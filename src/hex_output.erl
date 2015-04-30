@@ -81,11 +81,11 @@
 	 }).
 
 -record(state, {
-	  nodeid  = 0 :: uint32(),         %% id of hex node
-	  chan    = 0 :: uint8(),          %% output number 1..254
-	  ramp_step = 20 :: uint32(),       %% min time quanta in during ramp
+	  nodeid  = 0 :: hex_uint32(),         %% id of hex node
+	  chan    = 0 :: hex_uint8(),          %% output number 1..254
+	  ramp_step = 20 :: hex_uint32(),       %% min time quanta in during ramp
 
-	  counter = 0 :: uint32(),         %% repeat counter
+	  counter = 0 :: hex_uint32(),         %% repeat counter
 	  tref    = undefined :: undefined | reference(),
 	  tramp   = undefined :: undefined | reference(),
 
