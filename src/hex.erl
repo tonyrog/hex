@@ -31,6 +31,9 @@
 -export([pp_yang/1]).
 -export([save_yang/2]).
 -export([subscribe/0, subscribe/1, unsubscribe/0]).
+-export([event/1, event/2]).
+-export([event_list/0]).
+-export([event_signal/1]).
 
 -include("../include/hex.hrl").
 
@@ -106,6 +109,23 @@ subscribe() ->
 unsubscribe() ->
     hex_server:unsubscribe().
 
+%%
+%% Event access
+%%
+
+%% Get all defined events (inventory)
+event_list() ->
+    hex_server:event_list().
+
+%% Get the signal belonging to event with label Label
+event_signal(Label) ->
+    hex_server:event_signal(Label).
+
+%% Send an event to hex
+event(Signal) ->
+    hex_server:event(Signal,[]).
+event(Signal, Env) ->
+    hex_server:event(Signal, Env).
 
 %%
 %% Utility to exand environment "variables" in unicode text

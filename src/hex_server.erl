@@ -27,17 +27,28 @@
 
 %% API
 -export([start_link/1]).
--export([reload/0, load/1, dump/0]).
--export([subscribe/1, unsubscribe/0]).
+-export([reload/0, 
+	 load/1, 
+	 dump/0]).
+-export([subscribe/1, 
+	 unsubscribe/0]).
 -export([event_list/0]).
+-export([event_signal/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 terminate/2, code_change/3]).
+-export([init/1, 
+	 handle_call/3, 
+	 handle_cast/2, 
+	 handle_info/2,
+	 terminate/2, 
+	 code_change/3]).
 
--export([output/3, input/2, event/2, transmit/2]).
--export([match_value/2, match_pattern/2]).
-
+-export([output/3, 
+	 input/2, 
+	 event/2, 
+	 transmit/2]).
+-export([match_value/2, 
+	 match_pattern/2]).
 
 -include("../include/hex.hrl").
 
@@ -48,14 +59,14 @@
 
 -record(map_item,
 	{
-	  label         :: integer(),          
-	  id            :: uint32(),  %% remote id
-	  chan          :: uint8()   %% remote channel number
+	  label         :: integer() | atom(),          
+	  id            :: hex_uint32(),  %% remote id
+	  chan          :: hex_uint8()   %% remote channel number
 	}).
 
 -record(int_event,
 	{
-	  label          :: integer(),          
+	  label          :: integer() | atom(),          
 	  ref            :: reference(),
 	  app            :: atom(),
 	  flags          :: [{Key::atom(), Value::term()}],
@@ -107,6 +118,9 @@ unsubscribe() ->
 
 event_list() ->
     gen_server:call(?SERVER, event_list).
+    
+event_signal(Label) ->
+    gen_server:call(?SERVER, {event_signal, Label}).
     
 %%--------------------------------------------------------------------
 %% @doc
@@ -218,6 +232,14 @@ handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
 handle_call(event_list, _From, State=#state {evt_list = EList}) ->
     List = [{E#int_event.label, E#int_event.signal} || E <- EList],
     {reply, {ok, List}, State};
+handle_call({event_signal, Label}, _From, State=#state {evt_list = EList}) ->
+    case lists:keyfind(Label, #int_event.label, EList) of
+	#int_event {signal = Signal} ->
+	    {reply, {ok, Signal}, State};
+	false ->
+	    lager:debug("Unknown event ~p", [Label]),
+	    {reply, {error, unknown_event}, State}
+    end;
 handle_call(dump, _From, State) ->
     io:format("State ~p", [State]),
     {reply, ok, State};
@@ -765,7 +787,6 @@ output(Channel,Target,Value={_Type,_,_}) when
 transmit(Signal=#hex_signal{}, _Env) ->
     gen_server:cast(?SERVER, {transmit, Signal}).
 
-%% generate input event to dispatcher
 event(S0=#hex_signal{}, Env) ->
     S = #hex_signal { id    = event_value(S0#hex_signal.id, Env),
 		      chan  = event_value(S0#hex_signal.chan, Env),
