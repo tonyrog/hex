@@ -37,27 +37,27 @@
 -define(HEX_ALARM_CNFRM_ACK,16#2809).   %% Alarm ack code notification
 -define(HEX_ALARM_CNFRM,    16#280E).   %% Confirm larm condition (from client)
 
--define(HEX_COBID_EXT,      16#02000000).
+-define(HEX_COBID_EXT,      16#20000000).
 -define(HEX_XNODE_ID_MASK,  16#01FFFFFF).  %% 25 bit node id
 
 -type base_pattern() ::
-	hex_uint32() |
-	{mask,Mask::hex_uint32(),Match::hex_uint32()} |
+	uint32() |
+	{mask,Mask::uint32(),Match::uint32()} |
 	{range,Low::integer(),High::integer()} |
 	{'not',base_pattern()} |
 	{'and',base_pattern(),base_pattern()} |
 	{'or',base_pattern(),base_pattern()}.
 
 -type pattern() :: base_pattern() | [base_pattern()].
--type hex_uint1() :: 0..1.
--type hex_uint8() :: 0..16#ff.
--type hex_uint16() :: 0..16#ffff.
--type hex_uint32() :: 0..16#ffffffff.
--type hex_uint64() :: 0..16#ffffffffffffffff.
--type hex_int8()   :: -16#80..16#7f.
--type hex_int16()  :: -16#8000..16#7fff.
--type hex_int32()  :: -16#80000000..16#7fffffff.
--type hex_int64()  :: -16#8000000000000000..16#7fffffffffffffff.
+-type uint1() :: 0..1.
+-type uint8() :: 0..16#ff.
+-type uint16() :: 0..16#ffff.
+-type uint32() :: 0..16#ffffffff.
+-type uint64() :: 0..16#ffffffffffffffff.
+-type int8()   :: -16#80..16#7f.
+-type int16()  :: -16#8000..16#7fff.
+-type int32()  :: -16#80000000..16#7fffffff.
+-type int64()  :: -16#8000000000000000..16#7fffffffffffffff.
 
 -define(is_uint1(X),  (((X) band (bnot 16#1)) == 0) ).
 -define(is_uint4(X),  (((X) band (bnot 16#f)) == 0) ).
@@ -79,10 +79,10 @@
 
 -record(hex_signal,
 	{
-	  id      :: hex_uint32(),   %% signal ID
-	  chan    :: hex_uint8(),    %% signal channel
-	  type    :: hex_uint16(),   %% signal type (digital/analog..)
-	  value   :: hex_uint32(),   %% signal value
+	  id      :: uint32(),   %% signal ID
+	  chan    :: uint8(),    %% signal channel
+	  type    :: uint16(),   %% signal type (digital/analog..)
+	  value   :: uint32(),   %% signal value
 	  source  :: term()      %% signal source identifier
 	}).
 
