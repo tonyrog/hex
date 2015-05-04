@@ -229,7 +229,7 @@ event_spec() ->
      {leaf,transmit,[{type, boolean, []},
 		     {default, false, []},
 		     {description, "Transmit the signal using the "
-		      "transmit configration. This is used to implement "
+		      "transmit configuration. This is used to implement "
 		      "signal distribution. A CAN transmit module allow "
 		      "all nodes in the network to monitor the output "
 		      "actions.", []}
@@ -1256,7 +1256,7 @@ transmit_active(Active, State) ->
 			   source={output,State#state.chan}},
     Env = [],
     feedback_signal(Signal, Env, State),
-    hex_server:transmit(Signal, Env).
+    transmit_signal(Signal, Env, State).
 
 feedback_signal(Signal, Env, State) ->
     case ?VALUE(State,feedback) of
@@ -1265,7 +1265,7 @@ feedback_signal(Signal, Env, State) ->
     end.
 
 transmit_signal(Signal, Env, State) ->
-    case ?VALUE(State,feedback) of
+    case ?VALUE(State,transmit) of
 	0 -> ok;
 	_ -> hex_server:transmit(Signal, Env)
     end.
