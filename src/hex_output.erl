@@ -81,11 +81,11 @@
 	 }).
 
 -record(state, {
-	  nodeid  = 0 :: hex_uint32(),         %% id of hex node
-	  chan    = 0 :: hex_uint8(),          %% output number 1..254
-	  ramp_step = 20 :: hex_uint32(),       %% min time quanta in during ramp
+	  nodeid  = 0 :: uint32(),         %% id of hex node
+	  chan    = 0 :: uint8(),          %% output number 1..254
+	  ramp_step = 20 :: uint32(),       %% min time quanta in during ramp
 
-	  counter = 0 :: hex_uint32(),         %% repeat counter
+	  counter = 0 :: uint32(),         %% repeat counter
 	  tref    = undefined :: undefined | reference(),
 	  tramp   = undefined :: undefined | reference(),
 
@@ -1246,16 +1246,10 @@ get_option(Key, State) ->
 	    {error,key_not_declared}
     end.
 
-make_self(NodeID) ->
-    if NodeID band 16#02000000 =/= 0 ->
-	    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff);
-       true ->
-	    (2#0011 bsl 9) bor (NodeID band 16#7f)
-    end.
 
 %% output activity on/off
 transmit_active(Active, State) ->
-    Signal = #hex_signal { id=make_self(State#state.nodeid),
+    Signal = #hex_signal { id=hex:make_self(State#state.nodeid),
 			   chan=State#state.chan,
 			   type=?HEX_OUTPUT_ACTIVE,
 			   value=Active,
@@ -1278,7 +1272,7 @@ transmit_signal(Signal, Env, State) ->
 
 %% output "virtual" feedback
 feedback(Type, Value, State) ->
-    Signal = #hex_signal { id=make_self(State#state.nodeid),
+    Signal = #hex_signal { id=hex:make_self(State#state.nodeid),
 			   chan=State#state.chan,
 			   type=Type,
 			   value=Value,

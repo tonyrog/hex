@@ -66,36 +66,36 @@
 	  push_encoder = false :: boolean(),
 	  inc_encoder = false  :: boolean(),
 	  dec_encoder = false  :: boolean(),
-	  encoder_ival  = 250 :: hex_uint32(),
-	  encoder_pause = 3000 :: hex_uint32(),
-	  encoder_step = 1 :: hex_int32(),
+	  encoder_ival  = 250 :: uint32(),
+	  encoder_pause = 3000 :: uint32(),
+	  encoder_step = 1 :: int32(),
 	  %% analog config
-	  analog_trigger = ?CHANGED_BY_MORE_THAN_DELTA :: hex_uint8(),
-	  analog_delta = 0 :: hex_uint32(),
-	  analog_negative_delta = 1 :: hex_uint32(),
-	  analog_positive_delta = 1 :: hex_uint32(),
+	  analog_trigger = ?CHANGED_BY_MORE_THAN_DELTA :: uint8(),
+	  analog_delta = 0 :: uint32(),
+	  analog_negative_delta = 1 :: uint32(),
+	  analog_positive_delta = 1 :: uint32(),
 	  analog_max_frequency = 0  :: float(),
-	  inhibit_us = 0 :: hex_uint32(),  %% derived from max_frequency
-	  analog_upper_limit = 16#ffff :: hex_int32(),
-	  analog_lower_limit = 16#0000 :: hex_int32(),
-	  analog_min = 0               :: hex_int32(),
-	  analog_max = 16#ffff         :: hex_int32(),
-	  analog_offs = 0              :: hex_int32(),
+	  inhibit_us = 0 :: uint32(),  %% derived from max_frequency
+	  analog_upper_limit = 16#ffff :: int32(),
+	  analog_lower_limit = 16#0000 :: int32(),
+	  analog_min = 0               :: int32(),
+	  analog_max = 16#ffff         :: int32(),
+	  analog_offs = 0              :: int32(),
 	  analog_scale = 1.0           :: float(),
 	  %% rfid config
-	  rfid_match = 0 :: hex_uint32(),
-	  rfid_mask  = 0 :: hex_uint32(),
+	  rfid_match = 0 :: uint32(),
+	  rfid_mask  = 0 :: uint32(),
 	  rfid_match_to_digital :: boolean(),
-	  outputs = [] :: [{atom(),hex_uint8()}]
+	  outputs = [] :: [{atom(),uint8()}]
 	}).
 
 -record(s,
 	{
 	  id           :: atom() | integer(),
-	  value = 0    :: hex_uint32(),             %% last (digital) value
-	  an_value=0   :: hex_uint32(),             %% last scaled analog value
-	  an_mask = 0  :: hex_uint32(),             %% analog latch_mask
-	  an_inhibit = 0  :: hex_uint32(),          %% abs micro seconds
+	  value = 0    :: uint32(),             %% last (digital) value
+	  an_value=0   :: uint32(),             %% last scaled analog value
+	  an_mask = 0  :: uint32(),             %% analog latch_mask
+	  an_inhibit = 0  :: uint32(),          %% abs micro seconds
 	  src          :: term(),               %% last source
 	  timestamp    :: erlang:timestamp(),   %% last time
 	  timer        :: reference() | undefined,
