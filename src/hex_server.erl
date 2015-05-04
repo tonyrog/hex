@@ -60,8 +60,8 @@
 -record(map_item,
 	{
 	  label         :: integer() | atom(),          
-	  id            :: hex_uint32(),  %% remote id
-	  chan          :: hex_uint8()   %% remote channel number
+	  id            :: uint32(),  %% remote id
+	  channel       :: uint8()   %% remote channel number
 	}).
 
 -record(int_event,
@@ -160,14 +160,24 @@ init(Options) ->
 		    false -> ConfigOpt
 		end
 	end,
+    Map = create_map(proplists:get_value(map, Options, []),[]),
+
     lager:debug("starting hex_server nodeid=~.16B, config=~p",
 		[Nodeid, Config]),
     self() ! reload,
     {ok, #state{ nodeid = Nodeid,
 		 config = Config,
+		 map = Map,
 		 tab = Tab,
 		 input_rules = []
 	       }}.
+
+create_map([], Acc) ->
+    Acc;
+create_map([{Label, CobId, Chan} | Rest], Acc) ->
+    create_map(Rest, [#map_item {label = Label,
+				 id = hex_config:pattern(CobId),
+				 channel = Chan} | Acc]).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -523,7 +533,7 @@ add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
 	    lager:debug("add output id=~.16B, chan=~w id=~.16B, rchan=~w",
 		   [State#state.nodeid, Chan, Rid, Rchan]),
 	    Value = (Rid bsl 8) bor Rchan,
-	    Add = #hex_signal { id=make_self(State#state.nodeid),
+	    Add = #hex_signal { id=hex:make_self(State#state.nodeid),
 				chan=Chan,
 				type=?HEX_OUTPUT_ADD,
 				value=Value,
@@ -537,13 +547,6 @@ add_outputs([_|Flags], Rid, Rchan, State) ->
     add_outputs(Flags, Rid, Rchan, State);
 add_outputs([], _Rid, _Rchan, _State) ->
     ok.
-
-make_self(NodeID) ->
-    if NodeID band ?HEX_COBID_EXT =/= 0 ->
-	    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff);
-       true ->
-	    (2#0011 bsl 9) bor (NodeID band 16#7f)
-    end.
 
 
 run_output_add(Signal=#hex_signal {value = Value}, 
@@ -571,7 +574,7 @@ run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 			false ->
 			    MapItem = #map_item{label = Label,
 						id = RId,
-						chan = RChan},
+						channel = RChan},
 			    lager:debug("run_output_add: item ~p", [MapItem]),
 			    run_output_add(Id, LChan, Signal, Events, 
 					   State#state {map = [MapItem | Map]})
@@ -632,7 +635,7 @@ run_output_act(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
     run_output_act(Id, Chan, Value, Map, State).
 
 run_output_act(Id, Chan, Active, 
-	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
+	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs}) ->
     lager:debug("run_output_act: event ~p, active ~p", [Label, Active]),
     NewElist = event_active(Label, Active, EList, [], Subs),
@@ -660,7 +663,7 @@ run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
     run_alarm(Id, Chan, Value, Map, State).
 
 run_alarm(Id, Chan, Alarm, 
-	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
+	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs}) ->
     lager:debug("run_alarm: event ~p, alarm ~p", [Label, Alarm]),
     NewElist = event_alarm(Label, Alarm, EList, [], Subs),
@@ -696,7 +699,7 @@ value2nid(Value) ->
     Chan = (Value band 16#ff),
     {Id, Chan}.
 
-is_mapped([#map_item{label=Label,id=Id,chan=Chan}|_Map],Label,Id,Chan) ->
+is_mapped([#map_item{label=Label,id=Id,channel=Chan}|_Map],Label,Id,Chan) ->
     true;
 is_mapped([_|Map],Label,Id,Chan) ->
     is_mapped(Map,Label,Id,Chan);
@@ -706,7 +709,7 @@ is_mapped([],_Label,_Id,_Chan) ->
 remove_mapped(_Label,_Id,_Chan,[],Acc) ->
     Acc;
 remove_mapped(Label,Id,Chan, 
-	      [#map_item{label=Label,id=Id,chan=Chan}|Map],Acc) ->
+	      [#map_item{label=Label,id=Id,channel=Chan}|Map],Acc) ->
     remove_mapped(Label,Id,Chan,Map,Acc);
 remove_mapped(Label,Id,Chan,[MapItem|Map],Acc) ->
     remove_mapped(Label,Id,Chan,Map,[MapItem|Acc]).
