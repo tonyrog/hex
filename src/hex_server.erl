@@ -27,17 +27,28 @@
 
 %% API
 -export([start_link/1]).
--export([reload/0, load/1, dump/0]).
--export([subscribe/1, unsubscribe/0]).
+-export([reload/0, 
+	 load/1, 
+	 dump/0]).
+-export([subscribe/1, 
+	 unsubscribe/0]).
 -export([event_list/0]).
+-export([event_signal/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 terminate/2, code_change/3]).
+-export([init/1, 
+	 handle_call/3, 
+	 handle_cast/2, 
+	 handle_info/2,
+	 terminate/2, 
+	 code_change/3]).
 
--export([output/3, input/2, event/2, transmit/2]).
--export([match_value/2, match_pattern/2]).
-
+-export([output/3, 
+	 input/2, 
+	 event/2, 
+	 transmit/2]).
+-export([match_value/2, 
+	 match_pattern/2]).
 
 -include("../include/hex.hrl").
 
@@ -48,14 +59,14 @@
 
 -record(map_item,
 	{
-	  label         :: integer(),          
+	  label         :: integer() | atom(),          
 	  id            :: uint32(),  %% remote id
-	  chan          :: uint8()   %% remote channel number
+	  channel       :: uint8()   %% remote channel number
 	}).
 
 -record(int_event,
 	{
-	  label          :: integer(),          
+	  label          :: integer() | atom(),          
 	  ref            :: reference(),
 	  app            :: atom(),
 	  flags          :: [{Key::atom(), Value::term()}],
@@ -108,6 +119,9 @@ unsubscribe() ->
 event_list() ->
     gen_server:call(?SERVER, event_list).
     
+event_signal(Label) ->
+    gen_server:call(?SERVER, {event_signal, Label}).
+    
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -146,14 +160,24 @@ init(Options) ->
 		    false -> ConfigOpt
 		end
 	end,
+    Map = create_map(proplists:get_value(map, Options, []),[]),
+
     lager:debug("starting hex_server nodeid=~.16B, config=~p",
 		[Nodeid, Config]),
     self() ! reload,
     {ok, #state{ nodeid = Nodeid,
 		 config = Config,
+		 map = Map,
 		 tab = Tab,
 		 input_rules = []
 	       }}.
+
+create_map([], Acc) ->
+    Acc;
+create_map([{Label, CobId, Chan} | Rest], Acc) ->
+    create_map(Rest, [#map_item {label = Label,
+				 id = hex_config:pattern(CobId),
+				 channel = Chan} | Acc]).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -218,6 +242,14 @@ handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
 handle_call(event_list, _From, State=#state {evt_list = EList}) ->
     List = [{E#int_event.label, E#int_event.signal} || E <- EList],
     {reply, {ok, List}, State};
+handle_call({event_signal, Label}, _From, State=#state {evt_list = EList}) ->
+    case lists:keyfind(Label, #int_event.label, EList) of
+	#int_event {signal = Signal} ->
+	    {reply, {ok, Signal}, State};
+	false ->
+	    lager:debug("Unknown event ~p", [Label]),
+	    {reply, {error, unknown_event}, State}
+    end;
 handle_call(dump, _From, State) ->
     io:format("State ~p", [State]),
     {reply, ok, State};
@@ -501,7 +533,7 @@ add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
 	    lager:debug("add output id=~.16B, chan=~w id=~.16B, rchan=~w",
 		   [State#state.nodeid, Chan, Rid, Rchan]),
 	    Value = (Rid bsl 8) bor Rchan,
-	    Add = #hex_signal { id=make_self(State#state.nodeid),
+	    Add = #hex_signal { id=hex:make_self(State#state.nodeid),
 				chan=Chan,
 				type=?HEX_OUTPUT_ADD,
 				value=Value,
@@ -515,13 +547,6 @@ add_outputs([_|Flags], Rid, Rchan, State) ->
     add_outputs(Flags, Rid, Rchan, State);
 add_outputs([], _Rid, _Rchan, _State) ->
     ok.
-
-make_self(NodeID) ->
-    if NodeID band ?HEX_COBID_EXT =/= 0 ->
-	    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff);
-       true ->
-	    (2#0011 bsl 9) bor (NodeID band 16#7f)
-    end.
 
 
 run_output_add(Signal=#hex_signal {value = Value}, 
@@ -549,7 +574,7 @@ run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 			false ->
 			    MapItem = #map_item{label = Label,
 						id = RId,
-						chan = RChan},
+						channel = RChan},
 			    lager:debug("run_output_add: item ~p", [MapItem]),
 			    run_output_add(Id, LChan, Signal, Events, 
 					   State#state {map = [MapItem | Map]})
@@ -610,7 +635,7 @@ run_output_act(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
     run_output_act(Id, Chan, Value, Map, State).
 
 run_output_act(Id, Chan, Active, 
-	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
+	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs}) ->
     lager:debug("run_output_act: event ~p, active ~p", [Label, Active]),
     NewElist = event_active(Label, Active, EList, [], Subs),
@@ -638,7 +663,7 @@ run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
     run_alarm(Id, Chan, Value, Map, State).
 
 run_alarm(Id, Chan, Alarm, 
-	       [#map_item {label = Label, id = Id, chan = Chan} | Map], 
+	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs}) ->
     lager:debug("run_alarm: event ~p, alarm ~p", [Label, Alarm]),
     NewElist = event_alarm(Label, Alarm, EList, [], Subs),
@@ -674,7 +699,7 @@ value2nid(Value) ->
     Chan = (Value band 16#ff),
     {Id, Chan}.
 
-is_mapped([#map_item{label=Label,id=Id,chan=Chan}|_Map],Label,Id,Chan) ->
+is_mapped([#map_item{label=Label,id=Id,channel=Chan}|_Map],Label,Id,Chan) ->
     true;
 is_mapped([_|Map],Label,Id,Chan) ->
     is_mapped(Map,Label,Id,Chan);
@@ -684,7 +709,7 @@ is_mapped([],_Label,_Id,_Chan) ->
 remove_mapped(_Label,_Id,_Chan,[],Acc) ->
     Acc;
 remove_mapped(Label,Id,Chan, 
-	      [#map_item{label=Label,id=Id,chan=Chan}|Map],Acc) ->
+	      [#map_item{label=Label,id=Id,channel=Chan}|Map],Acc) ->
     remove_mapped(Label,Id,Chan,Map,Acc);
 remove_mapped(Label,Id,Chan,[MapItem|Map],Acc) ->
     remove_mapped(Label,Id,Chan,Map,[MapItem|Acc]).
@@ -765,7 +790,6 @@ output(Channel,Target,Value={_Type,_,_}) when
 transmit(Signal=#hex_signal{}, _Env) ->
     gen_server:cast(?SERVER, {transmit, Signal}).
 
-%% generate input event to dispatcher
 event(S0=#hex_signal{}, Env) ->
     S = #hex_signal { id    = event_value(S0#hex_signal.id, Env),
 		      chan  = event_value(S0#hex_signal.chan, Env),

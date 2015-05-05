@@ -27,10 +27,16 @@
 -export([auto_join/1, join_async/1, join/1]).
 -export([validate_flags/2]).
 -export([text_expand/2]).
+-export([make_self/1]).
 -export([is_string/1]).
 -export([pp_yang/1]).
 -export([save_yang/2]).
 -export([subscribe/0, subscribe/1, unsubscribe/0]).
+-export([event/1, event/2]).
+-export([event_list/0]).
+-export([event_signal/1]).
+-export([signal/5]).
+-export([set_signal_value/2]).
 
 -include("../include/hex.hrl").
 
@@ -106,6 +112,36 @@ subscribe() ->
 unsubscribe() ->
     hex_server:unsubscribe().
 
+%%
+%% Event access
+%%
+
+%% Get all defined events (inventory)
+event_list() ->
+    hex_server:event_list().
+
+%% Get the signal belonging to event with label Label
+event_signal(Label) ->
+    hex_server:event_signal(Label).
+
+%% Send an event to hex
+event(Signal) ->
+    hex_server:event(Signal,[]).
+event(Signal, Env) ->
+    hex_server:event(Signal, Env).
+
+%%
+%% Signal encapsulation
+%%
+signal(Id, Channel, Type, Value, Source) ->
+    #hex_signal {id = Id,
+		 chan = Channel,
+		 type = Type,
+		 value = Value,
+		 source = Source}.
+
+set_signal_value(Signal, Value) ->
+    Signal#hex_signal{value = Value}.
 
 %%
 %% Utility to exand environment "variables" in unicode text
@@ -191,6 +227,21 @@ rev_variable(Var) ->
 trim_hd([$\s|Cs]) -> trim_hd(Cs);
 trim_hd([$\t|Cs]) -> trim_hd(Cs);
 trim_hd(Cs) -> Cs.
+
+%%
+%% Utility to create a signal id 
+%%
+make_self(NodeID) ->
+    if NodeID band ?HEX_COBID_EXT =/= 0 ->
+	    %% extended nodeid
+	    ?HEX_COBID_EXT bor 
+		(2#0011 bsl 25) bor 
+		(NodeID band ?HEX_XNODE_ID_MASK);
+       true ->
+	    %% short nodeid
+	    (2#0011 bsl 9) bor (NodeID band 16#7f)
+    end.
+
 
 %%
 %% Library function for option validation:

@@ -229,7 +229,7 @@ event_spec() ->
      {leaf,transmit,[{type, boolean, []},
 		     {default, false, []},
 		     {description, "Transmit the signal using the "
-		      "transmit configration. This is used to implement "
+		      "transmit configuration. This is used to implement "
 		      "signal distribution. A CAN transmit module allow "
 		      "all nodes in the network to monitor the output "
 		      "actions.", []}
@@ -1246,23 +1246,17 @@ get_option(Key, State) ->
 	    {error,key_not_declared}
     end.
 
-make_self(NodeID) ->
-    if NodeID band 16#02000000 =/= 0 ->
-	    16#20000000 bor (2#0011 bsl 25) bor (NodeID band 16#1ffffff);
-       true ->
-	    (2#0011 bsl 9) bor (NodeID band 16#7f)
-    end.
 
 %% output activity on/off
 transmit_active(Active, State) ->
-    Signal = #hex_signal { id=make_self(State#state.nodeid),
+    Signal = #hex_signal { id=hex:make_self(State#state.nodeid),
 			   chan=State#state.chan,
 			   type=?HEX_OUTPUT_ACTIVE,
 			   value=Active,
 			   source={output,State#state.chan}},
     Env = [],
     feedback_signal(Signal, Env, State),
-    hex_server:transmit(Signal, Env).
+    transmit_signal(Signal, Env, State).
 
 feedback_signal(Signal, Env, State) ->
     case ?VALUE(State,feedback) of
@@ -1271,14 +1265,14 @@ feedback_signal(Signal, Env, State) ->
     end.
 
 transmit_signal(Signal, Env, State) ->
-    case ?VALUE(State,feedback) of
+    case ?VALUE(State,transmit) of
 	0 -> ok;
 	_ -> hex_server:transmit(Signal, Env)
     end.
 
 %% output "virtual" feedback
 feedback(Type, Value, State) ->
-    Signal = #hex_signal { id=make_self(State#state.nodeid),
+    Signal = #hex_signal { id=hex:make_self(State#state.nodeid),
 			   chan=State#state.chan,
 			   type=Type,
 			   value=Value,
