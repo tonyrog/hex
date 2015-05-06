@@ -46,7 +46,7 @@
 -export([output/3, 
 	 input/2, 
 	 event/2, 
-	 event_only/2, 
+	 event_and_transmit/2, 
 	 transmit/2]).
 -export([match_value/2, 
 	 match_pattern/2]).
@@ -251,6 +251,26 @@ handle_call({event_signal, Label}, _From, State=#state {evt_list = EList}) ->
 	    lager:debug("Unknown event ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
     end;
+handle_call({event_and_transmit, Label, Value}, _From, 
+	    State=#state {evt_list = EList}) ->
+    lager:debug("event_and_transmit: ~p\n", [Label]),
+    case {lists:keyfind(Label, #int_event.label, EList), Value} of
+	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
+		     alarm = Alarm}, 1}
+	  when Alarm =/= 0 ->
+	    alarm_confirm(Label, Signal, State),
+	    NewState = run_event(Signal, State#state.input_rules, State),
+	    {reply, ok, NewState};
+	{#int_event {signal = Signal},_} ->
+	    run_transmit(Signal#hex_signal {value = Value}, 
+			 State#state.transmit_rules),
+	    NewState = run_event(Signal, State#state.input_rules, State),
+	    {reply, ok, NewState};
+	{false, _} ->
+	    lager:debug("Unknown event ~p", [Label]),
+	    {reply, {error, unknown_event}, State}
+    end;
+
 handle_call(dump, _From, State) ->
     io:format("State ~p", [State]),
     {reply, ok, State};
@@ -269,19 +289,12 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({event,Signal=#hex_signal{}}, State) ->
-    %% io:format("handle_cast:EVENT ~p\n", [Signal]),
-    lager:debug("input event: ~p\n", [Signal]),
-    NewState = run_event(Signal, true, State#state.input_rules, State),
-    {noreply, NewState};
-
-handle_cast({event_only,Signal=#hex_signal{}}, State) ->
-    %% io:format("handle_cast:EVENT ~p\n", [Signal]),
-    lager:debug("input event_only: ~p\n", [Signal]),
-    NewState = run_event(Signal, false, State#state.input_rules, State),
+    lager:debug("event: ~p\n", [Signal]),
+    NewState = run_event(Signal, State#state.input_rules, State),
     {noreply, NewState};
 
 handle_cast({transmit,Signal=#hex_signal{}}, State) ->
-    lager:debug("transmit event: ~p\n", [Signal]),
+    lager:debug("transmit: ~p\n", [Signal]),
     run_transmit(Signal, State#state.transmit_rules),
     {noreply, State};
 
@@ -484,11 +497,9 @@ init_plugin(App, Dir, Flags) ->
 	    Error
     end.
 
-
-run_event(Signal, AlarmConfirmFlag, Rules, State) 
+run_event(Signal, Rules, State) 
   when is_record(Signal, hex_signal) ->
-    run_transmit(Signal, State#state.transmit_rules),
-    run_event_(Signal, AlarmConfirmFlag, Rules, State),
+    run_event_(Signal, Rules, State),
     case Signal#hex_signal.type of
 	?HEX_POWER_ON     -> run_power_on(Signal, Rules, State);
 	?HEX_OUTPUT_ADD   -> run_output_add(Signal, State);
@@ -501,7 +512,7 @@ run_event(Signal, AlarmConfirmFlag, Rules, State)
 	_ -> State
     end.
 
-run_event_(Signal, AlarmConfirmFlag, [Rule|Rules], State) ->
+run_event_(Signal, [Rule|Rules], State) ->
     case match_pattern(Signal, Rule#hex_input.signal) of
 	{true, Value} ->
 	    Src = Signal#hex_signal.source,
@@ -512,18 +523,12 @@ run_event_(Signal, AlarmConfirmFlag, [Rule|Rules], State) ->
 		    ?HEX_RFID    -> {rfid,Value,Src};
 		    Type -> {Type,Value,Src}
 		end,
-	    case alarm_confirm(Signal, AlarmConfirmFlag, State) of
-		0->
-		    input(Rule#hex_input.label, V);
-		_N ->
-		    %% Alarm confirm sent instead
-		    ok
-	    end,
-	    run_event_(Signal, AlarmConfirmFlag, Rules, State);
+	    input(Rule#hex_input.label, V),
+	    run_event_(Signal, Rules, State);
 	false ->
-	    run_event_(Signal, AlarmConfirmFlag, Rules, State)
+	    run_event_(Signal, Rules, State)
     end;
-run_event_(_Signal, _AlarmConfirmFlag, [], _State) ->
+run_event_(_Signal, [], _State) ->
     ok.
 
 run_power_on(Signal, [Rule|Rules], State) ->
@@ -668,7 +673,8 @@ event_active(Label, Active,
 	     Acc, Subs) ->
     App:output(Flags, [{output_active, Active}]),
     inform_subscribers({'output-active', [{label, Label}, {value, Active}]}, Subs),
-    event_active(Label, Active, Events, [E#int_event {active = Active} | Acc], Subs);
+    event_active(Label, Active, Events, 
+		 [E#int_event {active = (Active =/= 0)} | Acc], Subs);
 event_active(Label, Active, [E | Events], Acc, Subs) ->
     event_active(Label, Active, Events, [E | Acc], Subs).
 
@@ -700,38 +706,13 @@ event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
     event_alarm(Label, Alarm, Events, [E | Acc], Subs).
 
 
-alarm_confirm(_Signal=#hex_signal {id = Id, chan = Chan, 
-					 type = ?HEX_DIGITAL, value = 1},
-		    true, State=#state {map = Map}) ->
-    lager:debug("signal ~p", [_Signal]),
-    alarm_confirm(Id, Chan, Map, State, 0);
-alarm_confirm(_Signal, _AlarmConfirmFlag, _State) ->
-    0.
-
-alarm_confirm(_Id, _Chan, [], _State, Count) ->
-    Count;
-alarm_confirm(Id, Chan, 
-		    [#map_item {label = Label, id = Id, channel = Chan} | Map],
-		    State=#state{evt_list = EList}, Count) ->
-    NewCount = alarm_confirm(Label, Id, Chan, EList, State, Count),
-    alarm_confirm(Id, Chan, Map, State, NewCount);
-alarm_confirm(Id, Chan, [_M | Map], State, Count) ->
-    alarm_confirm(Id, Chan, Map, State, Count).
-
-alarm_confirm(_Label, _Id, _Chan, [], _State, Count) ->
-    Count;
-alarm_confirm(Label, Id, Chan, 
-	      [#int_event {label = Label, alarm = Alarm} | Events], State, Count) 
-  when Alarm =/= 0->
-    Confirm = #hex_signal { id=Id,
-			    chan=Chan,
-			    type=?HEX_ALARM_CNFRM,
-			    value=0,
-			    source={output,Chan}},
-    run_transmit(Confirm, State#state.transmit_rules),
-    alarm_confirm(Label, Id, Chan, Events, State, Count + 1);
-alarm_confirm(Label, Id, Chan, [_E | Events], State, Count) ->
-    alarm_confirm(Label, Id, Chan, Events, State, Count).
+alarm_confirm(Label, #hex_signal{id = Id, chan = Chan}, State) ->
+    Confirm = #hex_signal {id=Id,
+			   chan=Chan,
+			   type=?HEX_ALARM_CNFRM,
+			   value=0,
+			   source={event,Label}},
+    run_transmit(Confirm, State#state.transmit_rules).
 
 
 run_alarm_confirm_ack(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
@@ -876,14 +857,8 @@ event(S0=#hex_signal{}, Env) ->
 		    },
     gen_server:cast(?SERVER, {event, S}).
 
-event_only(S0=#hex_signal{}, Env) ->
-    S = #hex_signal { id    = event_value(S0#hex_signal.id, Env),
-		      chan  = event_value(S0#hex_signal.chan, Env),
-		      type  = event_value(S0#hex_signal.type, Env),
-		      value = event_value(S0#hex_signal.value, Env),
-		      source = event_value(S0#hex_signal.source, Env)
-		    },
-    gen_server:cast(?SERVER, {event_only, S}).
+event_and_transmit(Label, Value) ->
+    gen_server:call(?SERVER, {event_and_transmit, Label, Value}).
 
 event_value(Var, Env) when is_atom(Var) ->
     proplists:get_value(Var, Env, 0);
