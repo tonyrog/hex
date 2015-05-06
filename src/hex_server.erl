@@ -46,6 +46,7 @@
 -export([output/3, 
 	 input/2, 
 	 event/2, 
+	 event_only/2, 
 	 transmit/2]).
 -export([match_value/2, 
 	 match_pattern/2]).
@@ -270,7 +271,13 @@ handle_call(_Request, _From, State) ->
 handle_cast({event,Signal=#hex_signal{}}, State) ->
     %% io:format("handle_cast:EVENT ~p\n", [Signal]),
     lager:debug("input event: ~p\n", [Signal]),
-    NewState = run_event(Signal, State#state.input_rules, State),
+    NewState = run_event(Signal, true, State#state.input_rules, State),
+    {noreply, NewState};
+
+handle_cast({event_only,Signal=#hex_signal{}}, State) ->
+    %% io:format("handle_cast:EVENT ~p\n", [Signal]),
+    lager:debug("input event_only: ~p\n", [Signal]),
+    NewState = run_event(Signal, false, State#state.input_rules, State),
     {noreply, NewState};
 
 handle_cast({transmit,Signal=#hex_signal{}}, State) ->
@@ -478,22 +485,25 @@ init_plugin(App, Dir, Flags) ->
     end.
 
 
-run_event(Signal, Rules, State) when is_record(Signal, hex_signal) ->
-    run_event_(Signal, Rules, State),
+run_event(Signal, AlarmConfirmFlag, Rules, State) 
+  when is_record(Signal, hex_signal) ->
+    run_transmit(Signal, State#state.transmit_rules),
+    run_event_(Signal, AlarmConfirmFlag, Rules, State),
     case Signal#hex_signal.type of
 	?HEX_POWER_ON     -> run_power_on(Signal, Rules, State);
 	?HEX_OUTPUT_ADD   -> run_output_add(Signal, State);
         ?HEX_OUTPUT_DEL   -> run_output_del(Signal, State);
-        ?HEX_OUTPUT_ACTIVE  -> run_output_act(Signal, State);
+        ?HEX_OUTPUT_ACTIVE -> run_output_act(Signal, State);
 	%% ?HEX_POWER_OFF -> run_power_off(Signal, Rules, State);
 	%% ?HEX_WAKEUP    -> run_wakeup(Signal, Rules, State);
 	?HEX_ALARM        -> run_alarm(Signal, State);
+	?HEX_ALARM_CNFRM_ACK -> run_alarm_confirm_ack(Signal, State);
 	_ -> State
     end.
 
-run_event_(Signal, [Rule|Rules], State) ->
+run_event_(Signal, AlarmConfirmFlag, [Rule|Rules], State) ->
     case match_pattern(Signal, Rule#hex_input.signal) of
-	{true,Value} ->
+	{true, Value} ->
 	    Src = Signal#hex_signal.source,
 	    V = case Signal#hex_signal.type of
 		    ?HEX_DIGITAL -> {digital,Value,Src};
@@ -502,12 +512,18 @@ run_event_(Signal, [Rule|Rules], State) ->
 		    ?HEX_RFID    -> {rfid,Value,Src};
 		    Type -> {Type,Value,Src}
 		end,
-	    input(Rule#hex_input.label, V),
-	    run_event_(Signal, Rules, State);
+	    case alarm_confirm(Signal, AlarmConfirmFlag, State) of
+		0->
+		    input(Rule#hex_input.label, V);
+		_N ->
+		    %% Alarm confirm sent instead
+		    ok
+	    end,
+	    run_event_(Signal, AlarmConfirmFlag, Rules, State);
 	false ->
-	    run_event_(Signal, Rules, State)
+	    run_event_(Signal, AlarmConfirmFlag, Rules, State)
     end;
-run_event_(_Signal, [], _State) ->
+run_event_(_Signal, _AlarmConfirmFlag, [], _State) ->
     ok.
 
 run_power_on(Signal, [Rule|Rules], State) ->
@@ -630,14 +646,14 @@ run_output_del(_Id, _LChan, _Signal, [], State) ->
 
 run_output_act(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
-    lager:debug("run_output_act: ~p", [Signal]),
+    lager:debug("signal ~p", [Signal]),
     %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
     run_output_act(Id, Chan, Value, Map, State).
 
 run_output_act(Id, Chan, Active, 
 	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs}) ->
-    lager:debug("run_output_act: event ~p, active ~p", [Label, Active]),
+    lager:debug("event ~p, active ~p", [Label, Active]),
     NewElist = event_active(Label, Active, EList, [], Subs),
     run_output_act(Id, Chan, Active, Map, State#state{evt_list = NewElist});
 run_output_act(Id, Chan, Active, [_MapItem | Map], State) ->
@@ -658,14 +674,13 @@ event_active(Label, Active, [E | Events], Acc, Subs) ->
 
 run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
-    lager:debug("run_alarm: ~p", [Signal]),
-    %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+    lager:debug("signal ~p", [Signal]),
     run_alarm(Id, Chan, Value, Map, State).
 
 run_alarm(Id, Chan, Alarm, 
 	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs}) ->
-    lager:debug("run_alarm: event ~p, alarm ~p", [Label, Alarm]),
+    lager:debug("event ~p, alarm ~p", [Label, Alarm]),
     NewElist = event_alarm(Label, Alarm, EList, [], Subs),
     run_alarm(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
 run_alarm(Id, Chan, Alarm, [_MapItem | Map], State) ->
@@ -683,6 +698,68 @@ event_alarm(Label, Alarm,
     event_alarm(Label, Alarm, Events, [E#int_event {alarm = Alarm} | Acc], Subs);
 event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
     event_alarm(Label, Alarm, Events, [E | Acc], Subs).
+
+
+alarm_confirm(_Signal=#hex_signal {id = Id, chan = Chan, 
+					 type = ?HEX_DIGITAL, value = 1},
+		    true, State=#state {map = Map}) ->
+    lager:debug("signal ~p", [_Signal]),
+    alarm_confirm(Id, Chan, Map, State, 0);
+alarm_confirm(_Signal, _AlarmConfirmFlag, _State) ->
+    0.
+
+alarm_confirm(_Id, _Chan, [], _State, Count) ->
+    Count;
+alarm_confirm(Id, Chan, 
+		    [#map_item {label = Label, id = Id, channel = Chan} | Map],
+		    State=#state{evt_list = EList}, Count) ->
+    NewCount = alarm_confirm(Label, Id, Chan, EList, State, Count),
+    alarm_confirm(Id, Chan, Map, State, NewCount);
+alarm_confirm(Id, Chan, [_M | Map], State, Count) ->
+    alarm_confirm(Id, Chan, Map, State, Count).
+
+alarm_confirm(_Label, _Id, _Chan, [], _State, Count) ->
+    Count;
+alarm_confirm(Label, Id, Chan, 
+	      [#int_event {label = Label, alarm = Alarm} | Events], State, Count) 
+  when Alarm =/= 0->
+    Confirm = #hex_signal { id=Id,
+			    chan=Chan,
+			    type=?HEX_ALARM_CNFRM,
+			    value=0,
+			    source={output,Chan}},
+    run_transmit(Confirm, State#state.transmit_rules),
+    alarm_confirm(Label, Id, Chan, Events, State, Count + 1);
+alarm_confirm(Label, Id, Chan, [_E | Events], State, Count) ->
+    alarm_confirm(Label, Id, Chan, Events, State, Count).
+
+
+run_alarm_confirm_ack(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
+	       State=#state {map = Map}) ->
+    lager:debug("signal ~p", [Signal]),
+    run_alarm_confirm_ack(Id, Chan, Value, Map, State).
+
+run_alarm_confirm_ack(Id, Chan, Alarm, 
+	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
+	       State=#state{evt_list = EList, subs = Subs}) ->
+    lager:debug("event ~p, alarm ~p", [Label, Alarm]),
+    NewElist = event_alarm_confirm_ack(Label, Alarm, EList, [], Subs),
+    run_alarm_confirm_ack(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
+run_alarm_confirm_ack(Id, Chan, Alarm, [_MapItem | Map], State) ->
+    run_alarm_confirm_ack(Id, Chan, Alarm, Map, State);
+run_alarm_confirm_ack(_Id, _Chan, _Alarm, [], State) ->
+    State.
+
+event_alarm_confirm_ack(_Label, _Alarm, [], Acc, _Subs) ->
+    Acc;
+event_alarm_confirm_ack(Label, Alarm, 
+	    [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
+	    Acc, Subs) ->
+    App:output(Flags, [{alarm_ack, 0}]),
+    inform_subscribers({alarm_ack, [{label, Label}]}, Subs),
+    event_alarm_confirm_ack(Label, Alarm, Events, [E#int_event {alarm = 0} | Acc], Subs);
+event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->
+    event_alarm_confirm_ack(Label, Alarm, Events, [E | Acc], Subs).
 
 inform_subscribers(_Msg, []) ->
     ok;
@@ -798,6 +875,15 @@ event(S0=#hex_signal{}, Env) ->
 		      source = event_value(S0#hex_signal.source, Env)
 		    },
     gen_server:cast(?SERVER, {event, S}).
+
+event_only(S0=#hex_signal{}, Env) ->
+    S = #hex_signal { id    = event_value(S0#hex_signal.id, Env),
+		      chan  = event_value(S0#hex_signal.chan, Env),
+		      type  = event_value(S0#hex_signal.type, Env),
+		      value = event_value(S0#hex_signal.value, Env),
+		      source = event_value(S0#hex_signal.source, Env)
+		    },
+    gen_server:cast(?SERVER, {event_only, S}).
 
 event_value(Var, Env) when is_atom(Var) ->
     proplists:get_value(Var, Env, 0);
