@@ -258,13 +258,14 @@ handle_call({event_and_transmit, Label, Value}, _From,
 	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
 		     alarm = Alarm}, 1}
 	  when Alarm =/= 0 ->
-	    alarm_confirm(Label, Signal, State),
-	    NewState = run_event(Signal, State#state.input_rules, State),
+	    Signal1 = Signal#hex_signal {value = Value},
+	    alarm_confirm(Label, Signal1, State),
+	    NewState = run_event(Signal1, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{#int_event {signal = Signal},_} ->
-	    run_transmit(Signal#hex_signal {value = Value}, 
-			 State#state.transmit_rules),
-	    NewState = run_event(Signal, State#state.input_rules, State),
+	    Signal1 = Signal#hex_signal {value = Value},
+	    run_transmit(Signal1, State#state.transmit_rules),
+	    NewState = run_event(Signal1, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{false, _} ->
 	    lager:debug("Unknown event ~p", [Label]),
