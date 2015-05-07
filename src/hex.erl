@@ -237,7 +237,8 @@ trim_hd(Cs) -> Cs.
 %% Utility to create a signal id 
 %%
 make_self(NodeID) ->
-    if NodeID band ?HEX_COBID_EXT =/= 0 ->
+    if NodeID band ?HEX_COBID_EXT =/= 0;
+       NodeID > 127 ->
 	    %% extended nodeid
 	    ?HEX_COBID_EXT bor 
 		(2#0011 bsl 25) bor 
