@@ -47,6 +47,7 @@
 	 input/2, 
 	 event/2, 
 	 event_and_transmit/2, 
+	 analog_event_and_transmit/2, 
 	 transmit/2]).
 -export([match_value/2, 
 	 match_pattern/2]).
@@ -271,7 +272,26 @@ handle_call({event_and_transmit, Label, Value}, _From,
 	    lager:debug("Unknown event ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
     end;
-
+handle_call({analog_event_and_transmit, Label, Value}, _From, 
+	    State=#state {evt_list = EList}) ->
+    lager:debug("event_and_transmit: ~p\n", [Label]),
+    case {lists:keyfind(Label, #int_event.label, EList), Value} of
+	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
+		     alarm = Alarm}, 1}
+	  when Alarm =/= 0 ->
+	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
+	    alarm_confirm(Label, Signal1, State),
+	    NewState = run_event(Signal1, State#state.input_rules, State),
+	    {reply, ok, NewState};
+	{#int_event {signal = Signal},_} ->
+	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
+	    run_transmit(Signal1, State#state.transmit_rules),
+	    NewState = run_event(Signal1, State#state.input_rules, State),
+	    {reply, ok, NewState};
+	{false, _} ->
+	    lager:debug("Unknown event ~p", [Label]),
+	    {reply, {error, unknown_event}, State}
+    end;
 handle_call(dump, _From, State) ->
     io:format("State ~p", [State]),
     {reply, ok, State};
@@ -860,6 +880,9 @@ event(S0=#hex_signal{}, Env) ->
 
 event_and_transmit(Label, Value) ->
     gen_server:call(?SERVER, {event_and_transmit, Label, Value}).
+
+analog_event_and_transmit(Label, Value) ->
+    gen_server:call(?SERVER, {analog_event_and_transmit, Label, Value}).
 
 event_value(Var, Env) when is_atom(Var) ->
     proplists:get_value(Var, Env, 0);
