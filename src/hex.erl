@@ -33,6 +33,7 @@
 -export([save_yang/2]).
 -export([subscribe/0, subscribe/1, unsubscribe/0]).
 -export([event/1, event/2]).
+-export([event_and_transmit/2]).
 -export([event_list/0]).
 -export([event_signal/1]).
 -export([signal/5]).
@@ -129,6 +130,10 @@ event(Signal) ->
     hex_server:event(Signal,[]).
 event(Signal, Env) ->
     hex_server:event(Signal, Env).
+
+%% Send an event that will also be transmitted to the can bus
+event_and_transmit(Label, Value) ->
+    hex_server:event_and_transmit(Label, Value).
 
 %%
 %% Signal encapsulation
@@ -232,7 +237,8 @@ trim_hd(Cs) -> Cs.
 %% Utility to create a signal id 
 %%
 make_self(NodeID) ->
-    if NodeID band ?HEX_COBID_EXT =/= 0 ->
+    if NodeID band ?HEX_COBID_EXT =/= 0;
+       NodeID > 127 ->
 	    %% extended nodeid
 	    ?HEX_COBID_EXT bor 
 		(2#0011 bsl 25) bor 

@@ -494,7 +494,7 @@ state_off(_Event, State) ->
 
 state_on(init, State) ->
     ?STATE(on),
-    lager:debug("action in state_in init\n"),
+    lager:debug("action in state_on init\n"),
     State1 = action(State),
     {next_state, state_on, State1};
 state_on(Event={Name,{_Type,Value,_Src}}, State) when
