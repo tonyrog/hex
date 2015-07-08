@@ -188,7 +188,20 @@ hex_pattern({ID,Chan,Type,Value}) ->
 	P=#hex_pattern{} -> {ok, P}
     catch
 	error:_ -> {error,bad_pattern}
+    end;
+hex_pattern({ID,BinPat}) ->
+    try #hex_bin_pattern { id = pattern(ID),
+			   bin = bin_pattern(BinPat) } of
+	P=#hex_bin_pattern{} -> {ok, P}
+    catch
+	error:_ -> {error,bad_pattern}
     end.
+
+bin_pattern([{Size,Bits}|BinPat]) when is_integer(Size), Size > 0,
+				       is_integer(Bits); is_atom(Bits) ->
+    [{Size,Bits}|bin_pattern(BinPat)];
+bin_pattern([]) ->
+    [].
 
 pattern(P) when ?is_uint32(P) -> P;
 pattern(P={mask,Mask,Match}) when ?is_uint32(Mask),?is_uint32(Match) -> P;
