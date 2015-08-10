@@ -818,7 +818,7 @@ match_pattern(Sig, _Data, Pat) when is_record(Sig, hex_signal),
 	    case match_value(Pat#hex_pattern.value,Sig#hex_signal.value) of
 		true ->
 		    case Sig#hex_signal.type of
-			?HEX_DIGITAL -> 
+			?HEX_DIGITAL ->
 			    {true, digital, Sig#hex_signal.value};
 			?HEX_ANALOG ->
 			    {true, analog, Sig#hex_signal.value};
@@ -839,7 +839,10 @@ match_pattern(Sig, Data, Pat) when is_record(Sig, hex_signal),
 				   is_record(Pat, hex_bin_pattern) ->
     case match_value(Pat#hex_bin_pattern.id, Sig#hex_signal.id) of
 	true ->
-	    match_bin_pattern(Data, Pat#hex_bin_pattern.bin, []);
+	    R = match_bin_pattern(Data, Pat#hex_bin_pattern.bin, []),
+	    lager:debug("match bin pattern ~p / ~p = ~p\n",
+			[Data, Pat#hex_bin_pattern.bin, R]),
+	    R;
 	false ->
 	    false
     end.
