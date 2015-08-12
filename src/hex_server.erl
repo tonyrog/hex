@@ -50,7 +50,10 @@
 	 analog_event_and_transmit/2, 
 	 transmit/2]).
 -export([match_value/2, 
-	 match_pattern/2]).
+	 match_pattern/2,
+	 match_pattern/3,
+	 match_bin_pattern/3
+	]).
 
 -include("../include/hex.hrl").
 
@@ -261,12 +264,12 @@ handle_call({event_and_transmit, Label, Value}, _From,
 	  when Alarm =/= 0 ->
 	    Signal1 = Signal#hex_signal {value = Value},
 	    alarm_confirm(Label, Signal1, State),
-	    NewState = run_event(Signal1, State#state.input_rules, State),
+	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{#int_event {signal = Signal},_} ->
 	    Signal1 = Signal#hex_signal {value = Value},
 	    run_transmit(Signal1, State#state.transmit_rules),
-	    NewState = run_event(Signal1, State#state.input_rules, State),
+	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{false, _} ->
 	    lager:debug("Unknown event ~p", [Label]),
@@ -281,12 +284,12 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 	  when Alarm =/= 0 ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
 	    alarm_confirm(Label, Signal1, State),
-	    NewState = run_event(Signal1, State#state.input_rules, State),
+	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{#int_event {signal = Signal},_} ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
 	    run_transmit(Signal1, State#state.transmit_rules),
-	    NewState = run_event(Signal1, State#state.input_rules, State),
+	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{false, _} ->
 	    lager:debug("Unknown event ~p", [Label]),
@@ -309,9 +312,9 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({event,Signal=#hex_signal{}}, State) ->
-    lager:debug("event: ~p\n", [Signal]),
-    NewState = run_event(Signal, State#state.input_rules, State),
+handle_cast({event,Signal=#hex_signal{},Data}, State) ->
+    lager:debug("event: ~p data=~p\n", [Signal,Data]),
+    NewState = run_event(Signal, Data, State#state.input_rules, State),
     {noreply, NewState};
 
 handle_cast({transmit,Signal=#hex_signal{}}, State) ->
@@ -518,9 +521,9 @@ init_plugin(App, Dir, Flags) ->
 	    Error
     end.
 
-run_event(Signal, Rules, State) 
+run_event(Signal, Data, Rules, State) 
   when is_record(Signal, hex_signal) ->
-    run_event_(Signal, Rules, State),
+    run_event_(Signal, Data, Rules, State),
     case Signal#hex_signal.type of
 	?HEX_POWER_ON     -> run_power_on(Signal, Rules, State);
 	?HEX_OUTPUT_ADD   -> run_output_add(Signal, State);
@@ -533,23 +536,17 @@ run_event(Signal, Rules, State)
 	_ -> State
     end.
 
-run_event_(Signal, [Rule|Rules], State) ->
-    case match_pattern(Signal, Rule#hex_input.signal) of
-	{true, Value} ->
+run_event_(Signal, Data, [Rule|Rules], State) ->
+    case match_pattern(Signal, Data, Rule#hex_input.signal) of
+	{true, Type, Value} ->
 	    Src = Signal#hex_signal.source,
-	    V = case Signal#hex_signal.type of
-		    ?HEX_DIGITAL -> {digital,Value,Src};
-		    ?HEX_ANALOG ->  {analog,Value,Src};
-		    ?HEX_ENCODER -> {encoder,Value,Src};
-		    ?HEX_RFID    -> {rfid,Value,Src};
-		    Type -> {Type,Value,Src}
-		end,
+	    V = {Type, Value, Src},
 	    input(Rule#hex_input.label, V),
-	    run_event_(Signal, Rules, State);
+	    run_event_(Signal, Data, Rules, State);
 	false ->
-	    run_event_(Signal, Rules, State)
+	    run_event_(Signal, Data, Rules, State)
     end;
-run_event_(_Signal, [], _State) ->
+run_event_(_Signal, _Data, [], _State) ->
     ok.
 
 run_power_on(Signal, [Rule|Rules], State) ->
@@ -801,8 +798,8 @@ run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
     run_transmit_(Signal, Rules).
 
 run_transmit_(Signal, [Rule|Rules]) ->
-    case match_pattern(Signal, Rule#hex_transmit.signal) of
-	{true,_Value} ->
+    case match_pattern(Signal, <<>>, Rule#hex_transmit.signal) of
+	{true,_Type,_Value} ->
 	    App = Rule#hex_transmit.app,
 	    App:transmit(Signal, Rule#hex_transmit.flags),
 	    run_transmit_(Signal, Rules);
@@ -812,20 +809,64 @@ run_transmit_(Signal, [Rule|Rules]) ->
 run_transmit_(_Signal, []) ->
     ok.
 
+match_pattern(Sig, Pat) ->
+    match_pattern(Sig, <<>>, Pat).
 
-
-match_pattern(Sig, Pat) when is_record(Sig, hex_signal),
-			     is_record(Pat, hex_pattern) ->
+match_pattern(Sig, _Data, Pat) when is_record(Sig, hex_signal),
+				    is_record(Pat, hex_pattern) ->
     case match_value(Pat#hex_pattern.id,Sig#hex_signal.id) andalso
 	match_value(Pat#hex_pattern.chan,Sig#hex_signal.chan) andalso
 	match_value(Pat#hex_pattern.type, Sig#hex_signal.type) of
 	true ->
 	    case match_value(Pat#hex_pattern.value,Sig#hex_signal.value) of
-		true -> {true, Sig#hex_signal.value};
+		true ->
+		    case Sig#hex_signal.type of
+			?HEX_DIGITAL ->
+			    {true, digital, Sig#hex_signal.value};
+			?HEX_ANALOG ->
+			    {true, analog, Sig#hex_signal.value};
+			?HEX_ENCODER ->
+			    {true, encoder, Sig#hex_signal.value};
+			?HEX_RFID    ->
+			    {true, rfid, Sig#hex_signal.value};
+			Type         ->
+			    {true, Type, Sig#hex_signal.value}
+		    end;
 		false -> false
 	    end;
 	false ->
 	    false
+    end;
+match_pattern(Sig, Data, Pat) when is_record(Sig, hex_signal),
+				   is_binary(Data),
+				   is_record(Pat, hex_bin_pattern) ->
+    case match_value(Pat#hex_bin_pattern.id, Sig#hex_signal.id) of
+	true ->
+	    R = match_bin_pattern(Data, Pat#hex_bin_pattern.bin, []),
+	    lager:debug("match bin pattern ~p / ~p = ~p\n",
+			[Data, Pat#hex_bin_pattern.bin, R]),
+	    R;
+	false ->
+	    false
+    end.
+
+match_bin_pattern(Data, [{Size,Bind}|Pattern], Bound) when is_integer(Size) ->
+    case Data of
+	<<Bind:Size/little,Data1/bitstring>> when is_integer(Bind) ->
+	    match_bin_pattern(Data1, Pattern, Bound);
+	<<_:Size/little,Data1/bitstring>> when Bind =:= '_' ->  %% skip
+	    match_bin_pattern(Data1, Pattern, Bound);
+	<<Value:Size/little,Data1/bitstring>> when is_atom(Bind) ->
+	    match_bin_pattern(Data1, Pattern, [{Size,Bind,Value}|Bound]);
+	_ ->
+	    false
+    end;
+match_bin_pattern(_Data, [], Bound) ->  %% fixme keep bound name in env!
+    case lists:reverse(Bound) of
+	[{1,_Name,Value}|_] ->
+	    {true, digital, Value};
+	[{_Size,_Name,Value}|_] ->
+	    {true, analog, Value}
     end.
 
 match_value(A, A) -> true;
@@ -879,7 +920,8 @@ event(S0=#hex_signal{}, Env) ->
 		      value = event_value(S0#hex_signal.value, Env),
 		      source = event_value(S0#hex_signal.source, Env)
 		    },
-    gen_server:cast(?SERVER, {event, S}).
+    Data = proplists:get_value(data, Env, <<>>),
+    gen_server:cast(?SERVER, {event, S, Data}).
 
 event_and_transmit(Label, Value) ->
     gen_server:call(?SERVER, {event_and_transmit, Label, Value}).

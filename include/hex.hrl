@@ -51,6 +51,12 @@
 	{'or',base_pattern(),base_pattern()}.
 
 -type pattern() :: base_pattern() | [base_pattern()].
+
+-type bits_size() :: integer().
+-type bits_name() :: '_' | atom() | integer() | float().
+-type bits_pattern() :: { bits_size(), bits_name() }.
+-type bin_pattern() :: [ bits_pattern() ].
+
 -type uint1() :: 0..1.
 -type uint8() :: 0..16#ff.
 -type uint16() :: 0..16#ffff.
@@ -96,11 +102,18 @@
 	  value = []  :: pattern()   %% signal value pattern
 	}).
 
+-record(hex_bin_pattern,
+	{
+	  id    = [] :: pattern(),   %% signal id pattern
+	  bin   = [] :: bin_pattern()
+	}).
+
+
 %% input rules
 -record(hex_input,
 	{
 	  label :: atom() | integer(),  %% rule id
-	  signal :: #hex_pattern{},     %% input match pattern
+	  signal :: #hex_pattern{} | #hex_bin_pattern{}, %% input match pattern
 	  flags :: [{atom(),term()}]    %% input state flags
 	}).
 
