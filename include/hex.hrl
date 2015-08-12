@@ -24,6 +24,8 @@
 -define(HEX_ANALOG,         16#6400).  %% channel, 0x0000 - 0xFFFF
 -define(HEX_ENCODER,        16#6100).  %% -1,+1
 -define(HEX_RFID,           16#6200).  %% channel=type data=rfid:32
+-define(HEX_BATTERY,        16#6201).  %% sub=bank, data=volt:16, amp:16
+-define(HEX_LOAD,           16#6202).  %% data=amp:16  amp=A*100
 
 -define(HEX_POWER_ON,       16#2800).  %% Power ON
 -define(HEX_POWER_OFF,      16#2801).  %% Sent by unit before powerdown
@@ -104,10 +106,11 @@
 
 -record(hex_event,
 	{
-	  label :: atom() | integer(),
-	  app :: atom(),               %% application name of plugin
-	  flags :: [{atom(),term()}],  %% event application flags
-	  signal :: #hex_signal{}      %% signal to send/match
+	  label     :: atom() | integer(),
+	  flags = [] :: [{atom(),term()}],
+	  app       :: atom(),              %% application name of plugin
+	  app_flags :: [{atom(),term()}],   %% event application flags
+	  signal    :: #hex_signal{}        %% signal to send/match
 	}).
 
 -record(hex_output,

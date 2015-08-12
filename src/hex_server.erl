@@ -71,7 +71,7 @@
 	  label          :: integer() | atom(),          
 	  ref            :: reference(),
 	  app            :: atom(),
-	  flags          :: [{Key::atom(), Value::term()}],
+	  app_flags      :: [{Key::atom(), Value::term()}],
 	  signal         :: #hex_signal{},
 	  alarm=0        :: integer(), %% alarm id (0=ok)
 	  active=false   :: boolean()  %% status of id:chan 
@@ -465,15 +465,15 @@ start_inputs([], State) ->
     State.
 
 %% start
-start_events([#hex_event { label=L,app=App,flags=Flags,signal=Signal } | Evt],
+start_events([#hex_event { label=L,app=App,app_flags=AppFlags,signal=Signal } | Evt],
 	     State) ->
-    case start_plugin(App, in, Flags) of
+    case start_plugin(App, in, AppFlags) of
 	ok ->
-	    lager:debug("add_event: ~p ~p", [App,Flags]),
-	    {ok,Ref} = App:add_event(Flags, Signal, ?MODULE),
+	    lager:debug("add_event: ~p ~p", [App,AppFlags]),
+	    {ok,Ref} = App:add_event(AppFlags, Signal, ?MODULE),
 	    lager:debug("event ~w started ~w", [L, Ref]),
 	    EvtList = [#int_event{ label = L, ref = Ref, app = App,
-				   flags = Flags, signal = Signal} | 
+				   app_flags = AppFlags, signal = Signal} | 
 		       State#state.evt_list],
 	    start_events(Evt, State#state { evt_list = EvtList });
 	_Error ->
@@ -690,9 +690,10 @@ run_output_act(_Id, _Chan, _Active, [], State) ->
 event_active(_Label, _Active, [], Acc, _Subs) ->
     Acc;
 event_active(Label, Active, 
-	     [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
+	     [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
+	      Events], 
 	     Acc, Subs) ->
-    App:output(Flags, [{output_active, Active}]),
+    App:output(AppFlags, [{output_active, Active}]),
     inform_subscribers({'output-active', [{label, Label}, {value, Active}]}, Subs),
     event_active(Label, Active, Events, 
 		 [E#int_event {active = (Active =/= 0)} | Acc], Subs);
@@ -718,9 +719,10 @@ run_alarm(_Id, _Chan, _Alarm, [], State) ->
 event_alarm(_Label, _Alarm, [], Acc, _Subs) ->
     Acc;
 event_alarm(Label, Alarm, 
-	    [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
+	    [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
+	     Events], 
 	    Acc, Subs) ->
-    App:output(Flags, [{alarm, Alarm}]),
+    App:output(AppFlags, [{alarm, Alarm}]),
     inform_subscribers({alarm, [{label, Label}, {value, Alarm}]}, Subs),
     event_alarm(Label, Alarm, Events, [E#int_event {alarm = Alarm} | Acc], Subs);
 event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
@@ -755,9 +757,10 @@ run_alarm_confirm_ack(_Id, _Chan, _Alarm, [], State) ->
 event_alarm_confirm_ack(_Label, _Alarm, [], Acc, _Subs) ->
     Acc;
 event_alarm_confirm_ack(Label, Alarm, 
-	    [E=#int_event {label = Label, app = App, flags = Flags} | Events], 
+	    [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
+	     Events], 
 	    Acc, Subs) ->
-    App:output(Flags, [{alarm_ack, 0}]),
+    App:output(AppFlags, [{alarm_ack, 0}]),
     inform_subscribers({alarm_ack, [{label, Label}]}, Subs),
     event_alarm_confirm_ack(Label, Alarm, Events, [E#int_event {alarm = 0} | Acc], Subs);
 event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->

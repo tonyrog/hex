@@ -7,6 +7,7 @@ Specification of HomeExchange (Hex) configuration file
     event() ::
        {event,
 	     Label::id(),
+		 [event_flag()],
          {App::app(),Flags::[plugin_input_flag()]},
          { ID::event_id(), Chan::event_chan(), Type::event_type(),
            Value::pattern()
@@ -18,6 +19,14 @@ Specification of HomeExchange (Hex) configuration file
 	app() :: atom()
 	plugin_input_flag() :: atom() || {atom(),term()}
 
+	event_flag() ::
+		{type, button} |
+		{type, switch} |
+		{type, dimmer} |
+		{type, dimmer_switch} |
+		{enable, true|false} | ( default true )
+
+	
 # Input processing
 
 	input() ::

@@ -51,8 +51,11 @@ scan(Rules) ->
 
 scan_([R | Rs], E, I, O, T, Err) ->
     case R of
-	{event,Label,{App,Flags},Event} when is_atom(App) ->
-	    {E1,Err1} = add_event(E,Label,App,Flags,Event,Err),
+	{event,Label,{App,AppFlags},Event} when is_atom(App) -> %% old form
+	    {E1,Err1} = add_event(E,Label,[],App,AppFlags,Event,Err),
+	    scan_(Rs, E1, I, O, T, Err1);
+	{event,Label,Flags,{App,AppFlags},Event} when is_atom(App) ->
+	    {E1,Err1} = add_event(E,Label,Flags,App,AppFlags,Event,Err),
 	    scan_(Rs, E1, I, O, T, Err1);
 	{input,Label,Event,Flags} ->
 	    {I1,Err1} = add_input(I,Label,Event,Flags,Err),
@@ -71,12 +74,16 @@ scan_([], E, I, O, T, []) ->
 scan_([],_E,_I,_O,_T,Err) ->
     {error,Err}.
 
-add_event(E, Label, App, Flags, Sig, Err) ->
+add_event(E, Label, Flags, App, AppFlags, Sig, Err) ->
     case lists:keyfind(Label, #hex_event.label, E) of
 	false ->
-	    Err1 = case validate_event(App, in, Flags) of
+	    Err0 = case validate_event_flags(Flags) of
 		       ok -> Err;
 		       Error1 -> [{event,Label,Error1}|Err]
+		   end,
+	    Err1 = case validate_event(App, in, AppFlags) of
+		       ok -> Err0;
+		       Error2 -> [{event,Label,Error2}|Err0]
 		   end,
 	    case hex_pattern(Sig) of
 		{ok,P} ->
@@ -91,12 +98,13 @@ add_event(E, Label, App, Flags, Sig, Err) ->
 			       },
 		    Event =
 			#hex_event { label=Label,
-				     app=App,
 				     flags=Flags,
+				     app=App,
+				     app_flags=AppFlags,
 				     signal=Signal },
 		    {[Event|E],Err1};
-		Error2 ->
-		    {E, [{event,Label,Error2}|Err1]}
+		Error3 ->
+		    {E, [{event,Label,Error3}|Err1]}
 	    end;
 	_ ->
 	    {E, [{event,Label,{error,ealready}} | Err]}
@@ -260,29 +268,29 @@ func(emergency) -> ?EMERGENCY;
 func(F) when ?is_uint4(F) -> F.
 
 
-validate_event(App, Dir, Flags) when is_atom(App) ->
+validate_event(App, Dir, AppFlags) when is_atom(App) ->
     case application:load(App) of
 	ok ->
-	    validate_app_flags(App, Dir, Flags);
+	    validate_app_flags(App, Dir, AppFlags);
 	{error,{already_loaded,App}} ->
-	    validate_app_flags(App, Dir, Flags);
+	    validate_app_flags(App, Dir, AppFlags);
 	Error ->
 	    Error
     end;
 validate_event(_, _, _) ->
     {error, bad_event_spec}.
 
-validate_app_flags(App, Dir, Flags) ->
+validate_app_flags(App, Dir, AppFlags) ->
     case code:ensure_loaded(App) of
 	{module,App} ->
 	    case erlang:function_exported(App, validate_event, 2) of
 		true ->
-		    App:validate_event(Dir, Flags);
+		    App:validate_event(Dir, AppFlags);
 		false ->
 		    case erlang:function_exported(App, event_spec, 1) of
 			true ->
 			    Spec = App:event_spec(Dir),
-			    hex:validate_flags(Flags, Spec);
+			    hex:validate_flags(AppFlags, Spec);
 			false ->
 			    {error, missing_event_spec}
 		    end
@@ -290,6 +298,23 @@ validate_app_flags(App, Dir, Flags) ->
 	Error ->
 	    Error
     end.
+
+validate_event_flags([Flag|Flags]) ->
+    case validate_event_flag(Flag) of
+	ok -> validate_event_flags(Flags);
+	error -> {error, Flag}
+    end;
+validate_event_flags([]) ->
+    ok.
+
+validate_event_flag({type,button}) -> ok;
+validate_event_flag({type,switch}) -> ok;
+validate_event_flag({type,dimmer}) -> ok;
+validate_event_flag({type,dimmer_switch}) -> ok;
+validate_event_flag({enable,true}) -> ok;
+validate_event_flag({enable,false}) -> ok;
+validate_event_flag(_) -> error.
+
 %%
 %% Action now look like
 %% "" | []   same as "true" => 1
