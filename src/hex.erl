@@ -32,6 +32,7 @@
 -export([pp_yang/1]).
 -export([save_yang/2]).
 -export([subscribe/0, subscribe/1, unsubscribe/0]).
+-export([inform/2]).
 -export([event/1, event/2]).
 -export([event_and_transmit/2]).
 -export([event_list/0]).
@@ -112,6 +113,9 @@ subscribe() ->
 
 unsubscribe() ->
     hex_server:unsubscribe().
+
+inform(Type, Options) ->
+    hex_server:inform(Type, Options).
 
 %%
 %% Event access

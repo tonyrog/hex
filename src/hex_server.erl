@@ -30,8 +30,9 @@
 -export([reload/0, 
 	 load/1, 
 	 dump/0]).
--export([subscribe/1, 
+-export([subscribe/1,
 	 unsubscribe/0]).
+-export([inform/2]).
 -export([event_list/0]).
 -export([event_signal/1]).
 
@@ -120,6 +121,9 @@ subscribe(Options) ->
 
 unsubscribe() ->
     gen_server:call(?SERVER, {unsubscribe, self()}).
+
+inform(Type, Options) ->
+    ?SERVER ! {inform, Type, Options}.
 
 event_list() ->
     gen_server:call(?SERVER, event_list).
@@ -244,6 +248,11 @@ handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
 	    erlang:demonitor(Mon, [flush]),
 	    {reply, ok, State#state {subs = NewSubs}}
     end;
+
+handle_call({inform, Type, Options}, _From, State=#state {subs = Subs }) ->
+    inform_subscribers({Type, Options}, Subs),
+    {reply, ok, State};
+    
 handle_call(event_list, _From, State=#state {evt_list = EList}) ->
     List = [{E#int_event.label, E#int_event.signal} || E <- EList],
     {reply, {ok, List}, State};
@@ -358,6 +367,10 @@ handle_info(reload, State) ->
 handle_info({init_plugin, AppName}, State) ->
     lager:debug("init PLUGIN: ~s", [AppName]),
     %% reload all events for Plugin AppName
+    {noreply, State};
+
+handle_info({inform, Type, Options}, State=#state {subs = Subs }) ->
+    inform_subscribers({Type, Options}, Subs),
     {noreply, State};
 
 handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
