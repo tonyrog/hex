@@ -21,6 +21,7 @@ Current plugins
 - hex_wse - [https://github.com/tonyrog/hex_wse](https://github.com/tonyrog/hex_wse)
 - hex_epx - [https://github.com/tonyrog/hex_epx](https://github.com/tonyrog/hex_epx)
 - hex_script - [https://github.com/tonyrog/hex_script](https://github.com/tonyrog/hex_script)
+- hex_event - [https://github.com/tonyrog/hex_event](https://github.com/tonyrog/hex_event)
 
 In progress and planned plugins
 
