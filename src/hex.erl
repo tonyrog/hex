@@ -225,8 +225,8 @@ text_expand_collect_([C|Text], Var, Pre, Shell, Acc, Env) ->
     if C >= $a, C =< $z;
        C >= $A, C =< $Z;
        C >= $0, C =< $9;
-       C == $_; C == $@;
-       C == $\s; C == $\t -> %% space and tab allowed in begining and end
+       C =:= $_; C =:= $@;
+       C =:= $\s; C =:= $\t -> %% space and tab allowed in begining and end
 	    text_expand_collect_(Text, [C|Var], Pre, Shell, Acc, Env);
        true ->
 	    %% char not allowed in variable named
