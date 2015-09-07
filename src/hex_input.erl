@@ -117,6 +117,9 @@ validate_flags(Flags) ->
 
 event_spec() ->
     [
+     {leaf, active, [{type,boolean,[]},
+		      {description, "Input active state.",[]},
+		      {default, true, []}]},
      {leaf, digital, [{type,boolean,[]},
 		      {description, "Allow digital input signals.",[]},
 		      {default, true, []}]},

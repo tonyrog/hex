@@ -40,6 +40,7 @@
 -export([event_signal/1]).
 -export([signal/5]).
 -export([set_signal_value/2]).
+-export([input_active/2]).
 
 -include("../include/hex.hrl").
 
@@ -144,6 +145,12 @@ event_and_transmit(Label, Value) ->
 analog_event_and_transmit(Label, Value) ->
     hex_server:analog_event_and_transmit(Label, Value).
 
+
+%%
+%% Inout access
+%%
+input_active(Label, TrueOrFalse) when is_boolean(TrueOrFalse) ->
+    hex_server:input_active(Label, TrueOrFalse).
 %%
 %% Signal encapsulation
 %%
@@ -646,3 +653,4 @@ pp_yang_range_elem(Value) ->io_lib:format("~w", [Value]).
 pp_yang_range([E]) -> pp_yang_range_elem(E);
 pp_yang_range([E|Es]) -> [pp_yang_range_elem(E),"|",pp_yang_range(Es)];
 pp_yang_range([]) -> "".
+
