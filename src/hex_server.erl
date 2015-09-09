@@ -395,6 +395,7 @@ handle_info({init_plugin, AppName}, State) ->
     {noreply, State};
 
 handle_info({inform, Type, Options}, State=#state {subs = Subs }) ->
+    lager:debug("inform: ~p ~p", [Type, Options]),
     inform_subscribers({Type, Options}, Subs),
     {noreply, State};
 
