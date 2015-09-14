@@ -45,6 +45,7 @@
 	 state_rampdown/2,
 	 state_deact/2]).
 
+
 -define(SERVER, ?MODULE).
 
 %%
@@ -296,6 +297,7 @@ event_spec() ->
        {leaf, expr, [{type,string,[]}]}
       ]}
     ].
+
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -853,6 +855,14 @@ handle_event(_Event, StateName, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
+handle_sync_event({getopts,all}, _From, StateName, State) ->
+    try get_options(all, State) of
+	Result ->
+	    {reply, {ok,[{state, StateName} | Result ]}, StateName, State}
+    catch
+	error:Reason ->
+	    {reply, {error,Reason}, StateName, State}
+    end;
 handle_sync_event({getopts,Flags}, _From, StateName, State) ->
     try get_options(Flags, State, []) of
 	Result ->
@@ -869,6 +879,7 @@ handle_sync_event({setopts,Opts}, _From, StateName, State) ->
 	Error ->
 	    {reply, Error, StateName, State}
     end;
+
 
 handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
@@ -1222,6 +1233,9 @@ clamp(V, Min, _Max) when V < Min -> Min;
 clamp(V, _Min, Max) when V > Max -> Max;
 clamp(V, _Min, _Max) -> V.
 
+get_options(all, State) ->
+    Flags = [Flag || {leaf, Flag, _Definition} <- event_spec()],
+    get_options(Flags, State, []).
 
 get_options([nodeid|Ks], State, Acc) ->
     get_options(Ks, State, [{nodeid,State#state.nodeid}|Acc]);
