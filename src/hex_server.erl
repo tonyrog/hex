@@ -36,6 +36,9 @@
 -export([event_list/0]).
 -export([event_signal/1]).
 -export([input_active/2]).
+-export([input2output/1]).
+-export([output2pid/1]).
+-export([input2output_pid/1]).
 
 %% gen_server callbacks
 -export([init/1, 
@@ -135,6 +138,15 @@ event_signal(Label) ->
 input_active(Label, Active) ->
     gen_server:call(?SERVER, {input_active, Label, Active}).
     
+input2output(Label) ->
+    gen_server:call(?SERVER, {input2output, Label}).
+
+output2pid(Channel) ->
+    gen_server:call(?SERVER, {output2pid, Channel}).
+
+input2output_pid(Label) ->
+    gen_server:call(?SERVER, {input2output_pid, Label}).
+
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -286,8 +298,27 @@ handle_call({input_active, Label, Active}, _From,
 		    {reply, ok, State#state {input_rules = [NewI | Rest]}}
 	    end;
 	false ->
-	    lager:debug("Unknown event ~p", [Label]),
+	    lager:debug("Unknown label ~p", [Label]),
 	    {reply, {error, unknown_input}, State}
+    end;
+handle_call({input2output, Label}, _From, 
+	    State=#state {input_rules = IList}) ->
+    lager:debug("input2output: ~p\n", [Label]),
+    {reply, input2output(Label, IList), State};
+handle_call({output2pid, Channel}, _From, 
+	    State=#state {out_list = OList}) ->
+    lager:debug("output2pid: ~p\n", [Channel]),
+    {reply, output2pid(Channel, OList), State};
+handle_call({input2output_pid, Label}, _From, 
+	    State=#state {input_rules = IList, out_list = OList}) ->
+    lager:debug("input2output_pid: ~p\n", [Label]),
+    case input2output(Label, IList) of
+	List when is_list(List) ->
+	    case lists:keyfind(channel, 1, List) of
+		{channel, C} -> {reply, output2pid(C, OList), State};
+		false -> {reply, {error, no_channel}, State}
+	    end;
+	{error, _Reason} = E -> {reply, E, State}
     end;
 handle_call({event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
@@ -958,6 +989,27 @@ output(Channel,Target,Value={_Type,_,_}) when
 	error:badarg ->
 	    lager:warning("hex_server not running", []),
 	    ignore
+    end.
+
+input2output(Label, List) ->
+    case lists:keyfind(Label, #hex_input.label, List) of
+	#hex_input {flags = Flags} ->
+	    case lists:keyfind(output, 1, Flags) of
+		{output, Output} ->
+		    Output;
+		false ->
+		    {error, no_output}
+	    end;
+	false ->
+	    {error, unknown_input}
+    end.
+
+output2pid(Channel, List) ->
+    case lists:keyfind(Channel, 1, List) of
+	{Channel, Pid} when is_pid(Pid) ->
+	    Pid;
+	false ->
+	    {error, no_output}
     end.
 
 transmit(Signal=#hex_signal{}, _Env) ->
