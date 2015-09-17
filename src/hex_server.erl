@@ -35,6 +35,10 @@
 -export([inform/2]).
 -export([event_list/0]).
 -export([event_signal/1]).
+-export([input_active/2]).
+-export([input2output/1]).
+-export([output2pid/1]).
+-export([input2output_pid/1]).
 
 %% gen_server callbacks
 -export([init/1, 
@@ -131,6 +135,18 @@ event_list() ->
 event_signal(Label) ->
     gen_server:call(?SERVER, {event_signal, Label}).
     
+input_active(Label, Active) ->
+    gen_server:call(?SERVER, {input_active, Label, Active}).
+    
+input2output(Label) ->
+    gen_server:call(?SERVER, {input2output, Label}).
+
+output2pid(Channel) ->
+    gen_server:call(?SERVER, {output2pid, Channel}).
+
+input2output_pid(Label) ->
+    gen_server:call(?SERVER, {input2output_pid, Label}).
+
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -248,7 +264,6 @@ handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
 	    erlang:demonitor(Mon, [flush]),
 	    {reply, ok, State#state {subs = NewSubs}}
     end;
-
 handle_call({inform, Type, Options}, _From, State=#state {subs = Subs }) ->
     inform_subscribers({Type, Options}, Subs),
     {reply, ok, State};
@@ -263,6 +278,47 @@ handle_call({event_signal, Label}, _From, State=#state {evt_list = EList}) ->
 	false ->
 	    lager:debug("Unknown event ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
+    end;
+handle_call({input_active, Label, Active}, _From, 
+	    State=#state {input_rules = IList}) ->
+    lager:debug("input_active: ~p to ~p\n", [Label, Active]),
+    case lists:keytake(Label, #hex_input.label, IList) of
+	{value, I=#hex_input {flags = Flags}, Rest} ->
+	    case lists:keyfind(active, 1, Flags) of
+		{active, Active} ->
+		    %% no change
+		    {reply, ok, State};
+		{active, _Other} ->
+		    NewFlags = 
+			lists:keyreplace(active, 1, Flags, {active, Active}),
+		    NewI = I#hex_input {flags = NewFlags},
+		    {reply, ok, State#state {input_rules = [NewI | Rest]}};
+		false ->
+		    NewI = I#hex_input {flags = [{active, Active} | Flags]},
+		    {reply, ok, State#state {input_rules = [NewI | Rest]}}
+	    end;
+	false ->
+	    lager:debug("Unknown label ~p", [Label]),
+	    {reply, {error, unknown_input}, State}
+    end;
+handle_call({input2output, Label}, _From, 
+	    State=#state {input_rules = IList}) ->
+    lager:debug("input2output: ~p\n", [Label]),
+    {reply, input2output(Label, IList), State};
+handle_call({output2pid, Channel}, _From, 
+	    State=#state {out_list = OList}) ->
+    lager:debug("output2pid: ~p\n", [Channel]),
+    {reply, output2pid(Channel, OList), State};
+handle_call({input2output_pid, Label}, _From, 
+	    State=#state {input_rules = IList, out_list = OList}) ->
+    lager:debug("input2output_pid: ~p\n", [Label]),
+    case input2output(Label, IList) of
+	List when is_list(List) ->
+	    case lists:keyfind(channel, 1, List) of
+		{channel, C} -> {reply, output2pid(C, OList), State};
+		false -> {reply, {error, no_channel}, State}
+	    end;
+	{error, _Reason} = E -> {reply, E, State}
     end;
 handle_call({event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
@@ -370,6 +426,7 @@ handle_info({init_plugin, AppName}, State) ->
     {noreply, State};
 
 handle_info({inform, Type, Options}, State=#state {subs = Subs }) ->
+    lager:debug("inform: ~p ~p", [Type, Options]),
     inform_subscribers({Type, Options}, Subs),
     {noreply, State};
 
@@ -561,15 +618,26 @@ run_event(Signal, Data, Rules, State)
 run_event_(Signal, Data, [Rule|Rules], State) ->
     case match_pattern(Signal, Data, Rule#hex_input.signal) of
 	{true, Type, Value} ->
-	    Src = Signal#hex_signal.source,
-	    V = {Type, Value, Src},
-	    input(Rule#hex_input.label, V),
-	    run_event_(Signal, Data, Rules, State);
+	    case active(Rule#hex_input.flags) of
+		true ->
+		    Src = Signal#hex_signal.source,
+		    V = {Type, Value, Src},
+		    input(Rule#hex_input.label, V),
+		    run_event_(Signal, Data, Rules, State);
+		false ->
+		    run_event_(Signal, Data, Rules, State)
+	    end;
 	false ->
 	    run_event_(Signal, Data, Rules, State)
     end;
 run_event_(_Signal, _Data, [], _State) ->
     ok.
+
+active([]) -> true;
+active([{active, true} | _Flags]) -> true;
+active([{active, false} | _Flags]) -> false;
+active([_Flag | Flags]) -> active(Flags).
+    
 
 run_power_on(Signal, [Rule|Rules], State) ->
     lager:debug("power on signal ~p", [Signal]),
@@ -930,6 +998,27 @@ output(Channel,Target,Value={_Type,_,_}) when
 	error:badarg ->
 	    lager:warning("hex_server not running", []),
 	    ignore
+    end.
+
+input2output(Label, List) ->
+    case lists:keyfind(Label, #hex_input.label, List) of
+	#hex_input {flags = Flags} ->
+	    case lists:keyfind(output, 1, Flags) of
+		{output, Output} ->
+		    Output;
+		false ->
+		    {error, no_output}
+	    end;
+	false ->
+	    {error, unknown_input}
+    end.
+
+output2pid(Channel, List) ->
+    case lists:keyfind(Channel, 1, List) of
+	{Channel, Pid} when is_pid(Pid) ->
+	    Pid;
+	false ->
+	    {error, no_output}
     end.
 
 transmit(Signal=#hex_signal{}, _Env) ->

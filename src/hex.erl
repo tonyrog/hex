@@ -40,6 +40,10 @@
 -export([event_signal/1]).
 -export([signal/5]).
 -export([set_signal_value/2]).
+-export([input_active/2]).
+-export([input2output/1]).
+-export([output2pid/1]).
+-export([input2output_pid/1]).
 
 -include("../include/hex.hrl").
 
@@ -143,6 +147,22 @@ event_and_transmit(Label, Value) ->
 %% Send an analog event that will also be transmitted to the can bus
 analog_event_and_transmit(Label, Value) ->
     hex_server:analog_event_and_transmit(Label, Value).
+
+
+%%
+%% Input/Output access
+%%
+input_active(Label, TrueOrFalse) when is_atom(Label), is_boolean(TrueOrFalse) ->
+    hex_server:input_active(Label, TrueOrFalse).
+
+input2output(Label) when is_atom(Label) ->
+    hex_server:input2output(Label).
+
+output2pid(Channel) when is_integer(Channel) ->
+    hex_server:output2pid(Channel).
+
+input2output_pid(Label) when is_atom(Label) ->
+    hex_server:input2output_pid(Label).
 
 %%
 %% Signal encapsulation
@@ -646,3 +666,4 @@ pp_yang_range_elem(Value) ->io_lib:format("~w", [Value]).
 pp_yang_range([E]) -> pp_yang_range_elem(E);
 pp_yang_range([E|Es]) -> [pp_yang_range_elem(E),"|",pp_yang_range(Es)];
 pp_yang_range([]) -> "".
+
