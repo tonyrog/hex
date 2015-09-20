@@ -409,10 +409,6 @@ validate_list(_Key, Value, Stmts) ->
 	    end
     end.
 
-
-
-
-
 -define(r(Min,Max), {range,[{(Min),(Max)}],[]}).
 
 validate_value(Value, boolean, Tas) ->
@@ -556,6 +552,13 @@ restrict_value(Value, Type, [{pattern,RegExp,_}|Opts]) ->
 	    restrict_value(Type, Value, Opts);
 	false ->
 	    {pattern, RegExp}
+    end;
+restrict_value(Value, Type, [{'fraction-digits',N,_}|Opts]) ->
+    case is_float(Value) of
+	true ->
+	    restrict_value(Type, Value, Opts);
+	false ->
+	    {decimal64,N}
     end;
 restrict_value( _Value, _Type, []) ->
     ok.
