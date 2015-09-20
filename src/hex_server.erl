@@ -510,10 +510,12 @@ start_outputs([#hex_output { label=L, flags=Flags, actions=Actions} | Out],
 	      State) ->
     case Actions of
 	{App,AppFlags} ->
+	    lager:debug("start_output: ~p ~p", [App,AppFlags]),
 	    start_plugin(App,out,AppFlags);
 	_ when is_list(Actions) ->
 	    lists:foreach(
 	      fun({_Pattern,{App,AppFlags}}) ->
+		      lager:debug("start_output: ~p ~p", [App,AppFlags]),
 		      start_plugin(App,out,AppFlags)
 	      end, Actions)
     end,
@@ -538,15 +540,22 @@ start_inputs([], State) ->
 %% start
 start_events([#hex_event { label=L,app=App,app_flags=AppFlags,signal=Signal } | Evt],
 	     State) ->
+    lager:debug("start_plugin: ~p ~p", [App,AppFlags]),
     case start_plugin(App, in, AppFlags) of
 	ok ->
-	    lager:debug("add_event: ~p ~p", [App,AppFlags]),
-	    {ok,Ref} = App:add_event(AppFlags, Signal, ?MODULE),
-	    lager:debug("event ~w started ~w", [L, Ref]),
-	    EvtList = [#int_event{ label = L, ref = Ref, app = App,
-				   app_flags = AppFlags, signal = Signal} | 
-		       State#state.evt_list],
-	    start_events(Evt, State#state { evt_list = EvtList });
+	    case App:add_event(AppFlags, Signal, ?MODULE) of
+		{ok,Ref} ->
+		    lager:debug("event ~w started ~w", [L, Ref]),
+		    EvtList = [#int_event{ label = L, ref = Ref, app = App,
+					   app_flags = AppFlags, 
+					   signal = Signal} | 
+			       State#state.evt_list],
+		    start_events(Evt, State#state { evt_list = EvtList });
+		Error ->
+		    lager:error("unable to add_event: ~p ~p: ~p",
+				[App,AppFlags,Error]),
+		    start_events(Evt, State)
+	    end;
 	_Error ->
 	    start_events(Evt, State)
     end;
