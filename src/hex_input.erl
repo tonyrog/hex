@@ -47,6 +47,7 @@
 -define(CHANGED_BY_MORE_THAN_DELTA,          16#04).
 -define(CHANGED_BY_MORE_THAN_NEGATIVE_DELTA, 16#08).
 -define(CHANGED_BY_MORE_THAN_POSITIVE_DELTA, 16#10).
+-define(ALWAYS,                              16#20).
 -define(LIMIT_BITS, 16#03).
 -define(DELTA_BITS, 16#1C).
 
@@ -204,7 +205,8 @@ event_spec() ->
 	 {bit, 'below_lower_limit', [{position,1,[]}]},
 	 {bit, 'changed-by-more-than-delta',[{position,2,[]}]},
 	 {bit, 'changed-by-more-than-negative-delta',[{position,3,[]}]},
-	 {bit, 'changed-by-more-than-positive-delta',[{position,4,[]}]}
+	 {bit, 'changed-by-more-than-positive-delta',[{position,4,[]}]},
+	 {bit, 'always',[{position,5,[]}]}
 	]},
        {default, ?CHANGED_BY_MORE_THAN_DELTA, []}
       ]},
@@ -305,9 +307,11 @@ start_link(Flags) ->
 %% @end
 %%--------------------------------------------------------------------
 init(Flags) ->
-    case set_options(Flags, #opt {}) of
+    {value,{id,ID},Flags1} = lists:keytake(id, 1, Flags),
+    case set_options(Flags1, #opt {}) of
 	{ok, Config} ->
-	    {ok, ?S_NEUTRAL, #s { timestamp = timestamp_us(),
+	    {ok, ?S_NEUTRAL, #s { id = ID,
+				  timestamp = timestamp_us(),
 				  config = Config }};
 	{error, Reason} ->
 	    {stop, Reason}
@@ -570,9 +574,12 @@ output(analog,Value,Src,State,S) ->
 	end,
     %% Delta changes always trigger, but level changes only trigger
     %% after the levels have been reset
+    Always = (Opt#opt.analog_trigger band ?ALWAYS) =/= 0,
     Mask1 = Mask band Opt#opt.analog_trigger,
 
-    Latch = (Mask1 band ?DELTA_BITS =/= 0)
+    Latch = Always
+	orelse
+	  (Mask1 band ?DELTA_BITS =/= 0)
 	orelse
 	  ((Mask1 band ?UPPER_LIMIT_EXCEEDED =/= 0)
 	   andalso
@@ -677,14 +684,18 @@ make_trigger('changed-by-more-than-delta') ->    ?CHANGED_BY_MORE_THAN_DELTA;
 make_trigger('changed-by-more-than-negative-delta') ->
     ?CHANGED_BY_MORE_THAN_NEGATIVE_DELTA;
 make_trigger('changed-by-more-than-positive-delta') ->
-    ?CHANGED_BY_MORE_THAN_POSITIVE_DELTA.
+    ?CHANGED_BY_MORE_THAN_POSITIVE_DELTA;
+make_trigger('always') ->
+    ?ALWAYS.
 
 get_trigger(Mask) ->
     select_bits(Mask, ['upper-limit-exceeded',
 		       'below-lower-limit',
 		       'changed-by-more-than-delta',
 		       'changed-by-more-than-negative-delta',
-		       'changed-by-more-than-positive-delta']).
+		       'changed-by-more-than-positive-delta',
+		       'always']).
+
 select_bits(0, _) ->
     [];
 select_bits(Mask, [Name|Names]) when Mask band 1 =:= 1 ->
