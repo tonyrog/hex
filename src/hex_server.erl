@@ -35,9 +35,10 @@
 -export([inform/2]).
 -export([event_list/0]).
 -export([event_signal/1]).
+-export([output2pid/1]).
+-export([input2pid/1]).
 -export([input_active/2]).
 -export([input2outputs/1]).
--export([output2pid/1]).
 -export([input2output_pids/1]).
 
 %% gen_server callbacks
@@ -138,11 +139,14 @@ event_signal(Label) ->
 input_active(Label, Active) ->
     gen_server:call(?SERVER, {input_active, Label, Active}).
     
-input2outputs(Label) ->
-    gen_server:call(?SERVER, {input2outputs, Label}).
-
 output2pid(Channel) ->
     gen_server:call(?SERVER, {output2pid, Channel}).
+
+input2pid(Label) ->
+    gen_server:call(?SERVER, {input2pid, Label}).
+
+input2outputs(Label) ->
+    gen_server:call(?SERVER, {input2outputs, Label}).
 
 input2output_pids(Label) ->
     gen_server:call(?SERVER, {input2output_pids, Label}).
@@ -301,20 +305,24 @@ handle_call({input_active, Label, Active}, _From,
 	    lager:debug("Unknown label ~p", [Label]),
 	    {reply, {error, unknown_input}, State}
     end;
+handle_call({input2pid, Label}, _From, 
+	    State=#state {in_list = IList}) ->
+    lager:debug("input2pid: ~p\n", [Label]),
+    {reply, to_pid(Label, IList), State};
+handle_call({output2pid, Channel}, _From, 
+	    State=#state {out_list = OList}) ->
+    lager:debug("output2pid: ~p\n", [Channel]),
+    {reply, to_pid(Channel, OList), State};
 handle_call({input2outputs, Label}, _From, 
 	    State=#state {input_rules = IList}) ->
     lager:debug("input2outputs: ~p\n", [Label]),
     {reply, input2outputs(Label, IList), State};
-handle_call({output2pid, Channel}, _From, 
-	    State=#state {out_list = OList}) ->
-    lager:debug("output2pid: ~p\n", [Channel]),
-    {reply, output2pid(Channel, OList), State};
 handle_call({input2output_pids, Label}, _From, 
 	    State=#state {input_rules = IList, out_list = OList}) ->
     lager:debug("input2output_pids: ~p\n", [Label]),
     case input2outputs(Label, IList) of
 	List when is_list(List) ->
-	    Reply = [output2pid(V, OList) || {K,V} <- List, K =:= channel],
+	    Reply = [to_pid(V, OList) || {K,V} <- List, K =:= channel],
 	    {reply, Reply, State};
 	{error, _Reason} = E -> {reply, E, State}
     end;
@@ -1011,12 +1019,12 @@ input2outputs(Label, List) ->
 	    {error, unknown_input}
     end.
 
-output2pid(Channel, List) ->
-    case lists:keyfind(Channel, 1, List) of
-	{Channel, Pid} when is_pid(Pid) ->
+to_pid(Id, List) ->
+    case lists:keyfind(Id, 1, List) of
+	{Id, Pid} when is_pid(Pid) ->
 	    Pid;
 	false ->
-	    {error, no_output_process}
+	    {error, no_process}
     end.
 
 transmit(Signal=#hex_signal{}, _Env) ->

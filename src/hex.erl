@@ -41,12 +41,18 @@
 -export([signal/5]).
 -export([set_signal_value/2]).
 -export([input_active/2]).
+
+%% Debug API
+-export([debug_input/1]).
+-export([debug_output/1]).
 -export([input2outputs/1]).
--export([output2pid/1]).
+-export([input2pid/1]).
 -export([input2output_pids/1]).
+-export([output2pid/1]).
 
 -include("../include/hex.hrl").
 
+	       
 debug() ->
     start_all(hex),
     start_all(ale),
@@ -152,17 +158,20 @@ analog_event_and_transmit(Label, Value) ->
 %%
 %% Input/Output access
 %%
+input2pid(Label) when is_atom(Label) ->
+    hex_server:input2pid(Label).
+
 input_active(Label, TrueOrFalse) when is_atom(Label), is_boolean(TrueOrFalse) ->
     hex_server:input_active(Label, TrueOrFalse).
 
 input2outputs(Label) when is_atom(Label) ->
     hex_server:input2outputs(Label).
 
-output2pid(Channel) when is_integer(Channel) ->
-    hex_server:output2pid(Channel).
-
 input2output_pids(Label) when is_atom(Label) ->
     hex_server:input2output_pids(Label).
+
+output2pid(Channel) when is_integer(Channel) ->
+    hex_server:output2pid(Channel).
 
 %%
 %% Signal encapsulation
@@ -176,6 +185,31 @@ signal(Id, Channel, Type, Value, Source) ->
 
 set_signal_value(Signal, Value) ->
     Signal#hex_signal{value = Value}.
+
+%%
+%% Input/Output debug
+%%
+debug_input(Label) when is_atom(Label) ->
+    case hex_server:input2pid(Label) of
+	Pid when is_pid(Pid) -> ale:trace(on, Pid, debug);
+	E -> E
+    end.
+
+debug_output(Channel) when is_integer(Channel) ->
+    case hex_server:output2pid(Channel) of
+	Pid when is_pid(Pid) -> ale:trace(on, Pid, debug);
+	E -> E
+    end;
+debug_output(Pid) when is_pid(Pid) ->
+    ale:trace(on, Pid, debug);
+debug_output(Label) when is_atom(Label) ->
+    case hex_server:input2output_pids(Label) of
+	Pids when is_list(Pids) ->
+	    lists:foreach(fun(Pid) -> debug_output(Pid) end, Pids);
+	E -> E
+    end.
+
+
 
 %%
 %% Utility to exand environment "variables" in unicode text

@@ -108,21 +108,7 @@
 	  actions = []                        %% [{Cond,Value,{App,Flags}}]
 	 }).
 
--ifdef(state_debug).
--define(STATE(Name),
-	io:format("~s:~w: ~p STATE: ~w\n",
-		  [?MODULE, ?LINE, State#state.chan, (Name)])).
--define(STATE(Name,Event),
-	io:format("~s:~w: ~p STATE: ~w event: ~p\n",
-		  [?MODULE, ?LINE,
-		   State#state.chan,
-		   (Name),(Event)])).
--define(verbose(Fmt,As), io:format((Fmt)++"\n", (As))).
--else.
--define(STATE(Name), ok).
--define(STATE(Name,Event), ok).
--define(verbose(Fmt,As), ok).
--endif.
+-define(EVENT(Event), lager:debug("event ~p", [Event])).
 
 -define(INPUT_NONE,     0).
 -define(INPUT_ENABLE,   1).
@@ -405,7 +391,7 @@ init({Flags,Actions0}) ->
 	    transmit_active(A, State),
 	    E = min(?CORE_VALUE(State,Core2,enable), 1),
 	    if E =:= 0 ->
-		    ?STATE(off),
+		    lager:debug("initial state off"),
 		    State2 = State#state { enable_value=E,
 					   active_value=A,
 					   deactivate=true,
@@ -413,7 +399,7 @@ init({Flags,Actions0}) ->
 		    {_,_,State3} = state_off(init, State2),
 		    {ok, state_off, State3};
 	       E =:= 1 ->
-		    ?STATE(on),
+		    lager:debug("initial state on"),
 		    State2 = do_enabled(1, State#state { enable_value=E,
 							 active_value=A,
 							 core=Core2 }),
@@ -461,7 +447,7 @@ install_variables([], Core, Targ, Acc) ->
 %% @end
 %%--------------------------------------------------------------------
 state_off(init, State) ->
-    ?STATE(off),
+    ?EVENT(init),
     State1 = do_enabled(0, State),
     _Remained = cancel_timer(State1#state.tref),
     if State1#state.active_value =:= 1, not State1#state.deactivate ->
@@ -478,9 +464,9 @@ state_off(init, State) ->
 
 state_off(Event={Name,{_Type,Value,_Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(off, Event),
+    ?EVENT(Event),
     if State#state.inhibited ->
-	    ?verbose("inhibited in state_off", []),
+	    lager:debug("inhibited in state_off"),
 	    {next_state, state_off, State};
        true ->
 	    case do_input(Event, State) of
@@ -495,13 +481,13 @@ state_off(_Event, State) ->
     {next_state, state_off, State}.
 
 state_on(init, State) ->
-    ?STATE(on),
+    ?EVENT(init),
     lager:debug("action in state_on init\n"),
     State1 = action(State),
     {next_state, state_on, State1};
 state_on(Event={Name,{_Type,Value,_Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(on, Event),
+    ?EVENT(Event),
     case do_input(Event, State) of
 	{?INPUT_DISABLE, State1} ->
 	    do_deactivate(init, State1);
@@ -515,7 +501,7 @@ state_on(_Event, S) ->
 %% activation delay, activation may be cancelled in this phase
 %% by sending an digital 0 signal
 state_delay(init, State) ->
-    ?STATE(delay),
+    ?EVENT(init),
     Time = ?VALUE(State,delay),
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, delay),
@@ -526,12 +512,12 @@ state_delay(init, State) ->
     end;
 state_delay(_Event={timeout,TRef,delay}, State)
   when State#state.tref =:= TRef ->
-    ?STATE(delay, _Event),
+    ?EVENT(_Event),
     State1 = State#state { tref = undefined },
     state_rampup(init, State1);
 state_delay(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(delay, Event),
+    ?EVENT(Event),
     case do_input(Event, State) of
 	{?INPUT_DISABLE, State1} ->
 	    lager:debug("activation cancelled during delay from ~p", [Src]),
@@ -545,7 +531,7 @@ state_delay(_Event, State) ->
 
 %% Ramping up output over rampup time milliseconds
 state_rampup(init, State) ->
-    ?STATE(rampup),
+    ?EVENT(init),
     Time = ?VALUE(State,rampup),
     if Time > 0 ->
 	    Tm = State#state.ramp_step,
@@ -558,7 +544,7 @@ state_rampup(init, State) ->
 	    Td = max(Tm, Td0),
 	    T = 1-((A-A0)/Ad),
 	    Time1 = trunc(T*Time),
-	    ?verbose("rampup: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w",
+	    lager:debug("time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w",
 		     [Time, Time1, Ad, Td0, Td, A]),
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
@@ -570,7 +556,7 @@ state_rampup(init, State) ->
     end;
 state_rampup(_Event={timeout,TRef,{delta,Td}},State)
   when State#state.tref =:= TRef ->
-    ?STATE(rampup, _Event),
+    ?EVENT(_Event),
     case erlang:read_timer(State#state.tramp) of
 	false ->
 	    {next_state, state_rampup, State#state { tref=undefined} };
@@ -580,7 +566,7 @@ state_rampup(_Event={timeout,TRef,{delta,Td}},State)
 	    A1 = ?VALUE(State,high),
 	    T = (Time - Tr)/Time,
 	    A = trunc((A1-A0)*T + A0),
-	    ?verbose("rampup: T=~w A=~w", [T, A]),
+	    lager:debug("T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
 	    State2 = do_analog_value(A,State1),
@@ -588,16 +574,16 @@ state_rampup(_Event={timeout,TRef,{delta,Td}},State)
     end;
 state_rampup(_Event={timeout,TRef,done}, State)
   when State#state.tramp =:= TRef ->
-    ?STATE(rampup, _Event),
+    ?EVENT(_Event),
     cancel_timer(State#state.tref),
     State1 = State#state { tramp=undefined, tref=undefined },
-    ?verbose("rampup: T=~w A=~w", [1.0, max]),
+    lager:debug("T=~w A=~w", [1.0, max]),
     State2 = do_analog_value(max,State1),
     state_sustain(init, State2);
 
 state_rampup(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(rampup, Event),
+    ?EVENT(Event),
     case do_input(Event, State) of
 	{?INPUT_DISABLE,State1} ->
 	    lager:debug("rampup cancelled from ~p", [Src]),
@@ -617,7 +603,7 @@ state_rampup(_Event, S) ->
 %%
 
 state_sustain(init, State) ->
-    ?STATE(sustain),
+    ?EVENT(init),
     Time = ?VALUE(State,sustain),
     State1 = do_analog_value(max,State),
     if Time > 0 ->
@@ -631,12 +617,12 @@ state_sustain(init, State) ->
     end;
 state_sustain(_Event={timeout,TRef,sustain}, State)
   when State#state.tref =:= TRef ->
-    ?STATE(sustain, _Event),
+    ?EVENT(_Event),
     state_deact(init, State#state { tref=undefined });
 
 state_sustain(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(sustain, Event),
+    ?EVENT(Event),
     case do_input(Event, State) of
 	{?INPUT_DISABLE,State1} ->
 	    lager:debug("sustain cancelled from ~p", [Src]),
@@ -656,7 +642,7 @@ state_sustain(_Event, S) ->
 
 %% deactivation delay
 state_deact(init, State) ->
-    ?STATE(deact),
+    ?EVENT(init),
     Time = ?VALUE(State,deact),
     if Time > 0 ->
 	    TRef = gen_fsm:start_timer(Time, deact),
@@ -670,9 +656,9 @@ state_deact({timeout,TRef,deact}, State) when State#state.tref =:= TRef ->
 
 state_deact(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(deact, Event),
+    ?EVENT(Event),
     if State#state.inhibited ->
-	    ?verbose("inhibited in state_deact", []),
+	    lager:debug("inhibited in state_deact", []),
 	    {next_state, state_deact, State};
        true ->
 	    case do_input(Event, State) of
@@ -693,7 +679,7 @@ state_deact(_Event, S) ->
 
 %% Ramping down output over rampup time milliseconds
 state_rampdown(init, State) ->
-    ?STATE(rampdown),
+    ?EVENT(init),
     Time = ?VALUE(State,rampdown),
     if Time > 0 ->
 	    Tm = State#state.ramp_step,
@@ -705,7 +691,7 @@ state_rampdown(init, State) ->
 	    Td = max(Tm, Td0),
 	    T = 1-((A1-A)/Ad),
 	    Time1 = trunc(T*Time),
-	    ?verbose("rampdown: time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w",
+	    lager:debug("time=~w,time1=~w,Ad=~w,Td0=~w,Td=~w,A=~w",
 		     [Time,Time1,Ad,Td,Td0,A]),
 	    TRef = gen_fsm:start_timer(Td, {delta,Td}),
 	    TRamp = gen_fsm:start_timer(Time1, done),
@@ -717,7 +703,7 @@ state_rampdown(init, State) ->
     end;
 state_rampdown(_Event={timeout,TRef,{delta,Td}},State)
   when State#state.tref =:= TRef ->
-    ?STATE(rampdown,_Event),
+    ?EVENT(_Event),
     case erlang:read_timer(State#state.tramp) of
 	false ->
 	    {next_state, state_rampdown, State#state {tref=undefined} };
@@ -727,7 +713,7 @@ state_rampdown(_Event={timeout,TRef,{delta,Td}},State)
 	    A1 = ?VALUE(State,high),
 	    T = (Time-Tr)/Time,
 	    A = trunc((A0-A1)*T + A1),
-	    ?verbose("rampdown: T=~w A=~w", [T, A]),
+	    lager:debug("T=~w A=~w", [T, A]),
 	    TRef1 = gen_fsm:start_timer(Td, {delta,Td}),
 	    State1 = State#state { tref = TRef1 },
 	    State2 = do_analog_value(A,State1),
@@ -735,17 +721,17 @@ state_rampdown(_Event={timeout,TRef,{delta,Td}},State)
     end;
 state_rampdown(_Event={timeout,TRef,done}, State) when
       State#state.tramp =:= TRef ->
-    ?STATE(rampdown,_Event),
+    ?EVENT(_Event),
     cancel_timer(State#state.tref),
     State1 = State#state { tramp=undefined, tref=undefined },
-    ?verbose("rampdown: T=~w A=~w", [1.0, min]),
+    lager:debug("T=~w A=~w", [1.0, min]),
     State2 = do_analog_value(min,State1),
     state_wait(init, State2);
 state_rampdown(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(rampdown,Event),
+    ?EVENT(Event),
     if State#state.inhibited ->
-	    ?verbose("inhibited in state_rampdown", []),
+	    lager:debug("inhibited in state_rampdown", []),
 	    {next_state, state_rampdown, State};
        true ->
 	    case do_input(Event, State) of
@@ -767,7 +753,7 @@ state_rampdown(_Event, State) ->
     {next_state, state_rampdown, State}.
 
 state_wait(init, State) ->
-    ?STATE(wait),
+    ?EVENT(init),
     State1 = do_analog_value(min,State),
     WaitTime = ?VALUE(State1,wait),
     if State1#state.enable_value =:= 0; State1#state.counter =:= 0 ->
@@ -782,7 +768,7 @@ state_wait(init, State) ->
     end;
 state_wait(_Event={timeout,TRef,wait}, State)
   when State#state.tref =:= TRef ->
-    ?STATE(wait, _Event),
+    ?EVENT(_Event),
     Repeat = State#state.counter,
     if  Repeat =:= 0 -> %% should not happend?
 	    state_off(init, State#state { tref=undefined} );
@@ -795,7 +781,7 @@ state_wait(_Event={timeout,TRef,wait}, State)
 
 state_wait(Event={Name,{_Type,Value,Src}}, State) when
       is_atom(Name), is_integer(Value) ->
-    ?STATE(wait, Event),
+    ?EVENT(Event),
     case do_input(Event, State) of
 	{?INPUT_DISABLE, State1} ->
 	    lager:debug("disable during wait from ~p", [Src]),
@@ -808,18 +794,18 @@ state_wait(_Event, State) ->
     {next_state, state_wait, State}.
 
 do_activate(Event, State) ->
-    ?verbose("DO_ACTIVATE",[]),
+    lager:debug("DO_ACTIVATE",[]),
     Repeat = ?VALUE(State,repeat),
     State1 = State#state { counter = Repeat },
     do_reactivate(Event, State1).
 
 do_reactivate(_Event, State) ->
-    ?verbose("DO_REACTIVATE",[]),
+    lager:debug("DO_REACTIVATE",[]),
     state_delay(init, State).
     %% state_rampup(init, State).
 
 do_deactivate(_Event, State) ->
-    ?verbose("DO_DEACTIVATE",[]),
+    lager:debug("DO_DEACTIVATE",[]),
     state_deact(init, State).
 
 %%--------------------------------------------------------------------
@@ -899,7 +885,7 @@ handle_sync_event(_Event, _From, StateName, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({timeout,_Ref,inhibit_done}, StateName, State) ->
-    ?verbose("inhibitation stopped",[]),
+    lager:debug("inhibitation stopped",[]),
     {next_state, StateName, State#state { inhibited=false}};
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
@@ -1215,7 +1201,7 @@ start_inhibation(State) when not State#state.inhibited ->
     Inhibit = ?VALUE(State,inhibit),
     if Inhibit > 0 ->
 	    erlang:start_timer(Inhibit, self(), inhibit_done),
-	    ?verbose("inhibit started for: ~w ms", [Inhibit]),
+	    lager:debug("inhibit started for: ~w ms", [Inhibit]),
 	    State#state { inhibited = true };
        true ->
 	    State
