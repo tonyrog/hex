@@ -45,6 +45,7 @@
 %% Debug API
 -export([debug_input/1]).
 -export([debug_output/1]).
+-export([debug_inout/1]).
 -export([input2outputs/1]).
 -export([input2pid/1]).
 -export([input2output_pids/1]).
@@ -189,7 +190,7 @@ set_signal_value(Signal, Value) ->
 %%
 %% Input/Output debug
 %%
-debug_input(Label) when is_atom(Label) ->
+debug_input(Label) when is_atom(Label); is_integer(Label) ->
     case hex_server:input2pid(Label) of
 	Pid when is_pid(Pid) -> ale:trace(on, Pid, debug);
 	E -> E
@@ -201,15 +202,15 @@ debug_output(Channel) when is_integer(Channel) ->
 	E -> E
     end;
 debug_output(Pid) when is_pid(Pid) ->
-    ale:trace(on, Pid, debug);
-debug_output(Label) when is_atom(Label) ->
+    ale:trace(on, Pid, debug).
+
+debug_inout(Label) when is_atom(Label); is_integer(Label) ->
     case hex_server:input2output_pids(Label) of
 	Pids when is_list(Pids) ->
+	    debug_input(Label),
 	    lists:foreach(fun(Pid) -> debug_output(Pid) end, Pids);
 	E -> E
     end.
-
-
 
 %%
 %% Utility to exand environment "variables" in unicode text
