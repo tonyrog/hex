@@ -41,6 +41,7 @@
 -define(S_PUSH,       s_push).
 
 -define(SERVER, ?MODULE).
+-define(EVENT(Event), lager:debug("event ~p", [Event])).
 
 -define(UPPER_LIMIT_EXCEEDED,                16#01).
 -define(BELOW_LOWER_LIMIT,                   16#02).
@@ -333,40 +334,49 @@ init(Flags) ->
 %% @end
 %%--------------------------------------------------------------------
 
-s_neutral({digital,Value,Src}, S) ->
+s_neutral({digital,Value,Src} = _E, S) ->
+    ?EVENT(_E),
     digital_input(Value, Src, ?S_NEUTRAL, S);
-s_neutral({analog,Value,Src}, S) ->
+s_neutral({analog,Value,Src} = _E, S) ->
+    ?EVENT(_E),
     analog_input(Value, Src, ?S_NEUTRAL, S);
-s_neutral({encoder,Value,Src}, S) ->
+s_neutral({encoder,Value,Src} = _E, S) ->
+    ?EVENT(_E),
     encoder_input(Value, Src, ?S_NEUTRAL, S);
-s_neutral({rfid,Value,Src}, S) ->
+s_neutral({rfid,Value,Src} = _E, S) ->
+    ?EVENT(_E),
     rfid_input(Value, Src, ?S_NEUTRAL, S);
 %% digital/analog/encoder MUST be translated by dispatcher!
-s_neutral({Type,Value,Src}, S) when ?is_uint16(Type) ->
+s_neutral({Type,Value,Src} = _E, S) when ?is_uint16(Type) ->
+    ?EVENT(_E),
     output(Type,Value,Src,?S_NEUTRAL,S);
-s_neutral(pulse_done, S) ->
-    lager:debug("s_neutral:pulse_done", []),
+s_neutral(pulse_done = _E, S) ->
+    ?EVENT(_E),
     {next_state, ?S_NEUTRAL, S#s { estep = 0 }};
-s_neutral(_Value, S) ->
-    lager:debug("garbage ~w seen in state s_neutral", [_Value]),
+s_neutral(_Value = _E, S) ->
+    ?EVENT(_E),
     {next_state, ?S_NEUTRAL, S}.
 
 
 %% state while push_encoder and button is not released
-s_push(pulse, S) ->
+s_push(pulse = _E, S) ->
+    ?EVENT(_E),
     T = gen_fsm:send_event_after((S#s.config)#opt.encoder_ival, pulse),
     encoder_input(S#s.estep, S#s.src, ?S_PUSH,S#s { timer = T });
-s_push(pulse_done, S) ->
+s_push(pulse_done = _E, S) ->
+    ?EVENT(_E),
     lager:debug("s_push:pulse_done (ignore)", []),
     %% ignored since we probably changed direction
     {next_state, ?S_PUSH, S};
-s_push({digital,0,_Src}, S) ->
+s_push({digital,0,_Src} = _E, S) ->
+    ?EVENT(_E),
     %% fixme handle all digital=0 cases
     gen_fsm:cancel_timer(S#s.timer),
     receive pulse -> ok after 0 -> ok end, %% flush pulse
     T = gen_fsm:send_event_after((S#s.config)#opt.encoder_pause, pulse_done),
     {next_state, ?S_NEUTRAL, S#s { timer = T}};
-s_push(_, S) ->
+s_push(_E, S) ->
+    ?EVENT(_E),
     {next_state, ?S_PUSH, S}.
 
 analog_input(IValue, Src, State, S) ->
