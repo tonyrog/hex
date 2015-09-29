@@ -872,19 +872,35 @@ inform_subscribers({Type, Data} = Msg,
 		   [#subscriber {pid = Pid, options = Opts} | Subs]) ->
     case proplists:get_value(type, Opts, all) of
 	T when T =:= Type; T =:= all ->
-	    case {proplists:get_value(group, Data, undefined),
-		  proplists:get_value(group, Opts, undefined)} of
-		{Group, Group} ->
-		    lager:debug("informing ~p of ~p", [Pid, Msg]),
-		    Pid ! Msg;
-		_Other ->
-		    do_nothing
+	    case proplists:get_value(group, Opts, all) of
+		all -> 
+		    inform_subscribers(Msg, Pid, Opts);
+		Groups ->
+		    case lists:member(proplists:get_value(group, Data), Groups) of
+			true -> inform_subscribers(Msg, Pid, Opts);
+			false -> do_nothing
+		    end
 	    end;
 	_Other ->
 	    do_nothing
     end,
     inform_subscribers(Msg, Subs).
     
+inform_subscribers({_Type, Data} = Msg, Pid, Opts) ->
+    case proplists:get_value(item, Opts, all) of
+	all ->
+	    lager:debug("informing ~p of ~p", [Pid, Msg]),
+	    Pid ! Msg;
+	Items ->
+	    case lists:member(proplists:get_value(label, Data), Items) of
+		true ->
+		    lager:debug("informing ~p of ~p", [Pid, Msg]),
+		    Pid ! Msg;
+		false ->
+		    do_nothing
+	    end
+    end.
+
 value2nid(Value) ->
     Id0 = Value bsr 8,
     Id  = if Id0 < 127 -> Id0;
