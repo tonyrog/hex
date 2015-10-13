@@ -861,10 +861,38 @@ event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->
 
 inform_subscribers(_Msg, []) ->
     ok;
-inform_subscribers(Msg, [#subscriber {pid = Pid} | Subs]) ->
-    lager:debug("informing ~p of ~p", [Pid, Msg]),
-    Pid ! Msg,
-    inform_subscribers(Msg, Subs).
+inform_subscribers(Msg, [#subscriber {pid = Pid, options=Options} | Subs]) ->
+    case match_subscriber(Msg, Options) of
+	true ->
+	    lager:debug("informing ~p of ~p", [Pid, Msg]),
+	    Pid ! Msg,
+	    inform_subscribers(Msg, Subs);
+	false ->
+	    inform_subscribers(Msg, Subs)
+    end.
+
+match_subscriber({_Type,Options}, MatchOptions) ->
+    R = match_options(Options, MatchOptions),
+    lager:debug("match ~p with ~p = ~p\n", [Options, MatchOptions, R]),
+    R.
+
+match_options([{Key,Value}|Ks], MatchOptions) ->
+    case lists:keyfind(Key, 1, MatchOptions) of
+	false -> match_options(Ks, MatchOptions);
+        {_,MatchValue} ->
+	    try lists:member(Value, MatchValue) of
+		true ->
+		    match_options(Ks, MatchOptions);
+		false ->
+		    false
+	    catch
+		error:_ ->
+		    match_options(Ks, MatchOptions)
+	    end
+    end;
+match_options([], _MatchOptions) ->
+    true.
+	
     
 value2nid(Value) ->
     Id0 = Value bsr 8,
