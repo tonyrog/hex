@@ -222,7 +222,8 @@ create_map([{Label, CobId, Chan} | Rest], Acc) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({load,File}, _From, State) ->
+handle_call({load,File} = M, _From, State) ->
+    lager:debug("message ~p", [M]),
     case hex:is_string(File) of
 	true ->
 	    File1 = hex:text_expand(File,[]),
@@ -235,7 +236,8 @@ handle_call({load,File}, _From, State) ->
 	false ->
 	    {reply, {error,einval}, State}
     end;
-handle_call(reload, _From, State) ->
+handle_call(reload = M, _From, State) ->
+    lager:debug("message ~p", [M]),
     case reload(State#state.config, State) of
 	{ok,State1} ->
 	    {reply, ok, State1};
@@ -243,7 +245,7 @@ handle_call(reload, _From, State) ->
 	    {reply, Error, State}
     end;
 handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid),
-						   is_atom(AppName) ->
+						       is_atom(AppName) ->
     lager:info("plugin ~s [~w] joined", [AppName,Pid]),
     AppMon = erlang:monitor(process,Pid),
     %% schedule load of event defintions for App in a while
@@ -251,7 +253,8 @@ handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid),
     PluginUp = [{AppName,AppMon} | State#state.plugin_up],
     PluginDown = lists:delete(AppName, State#state.plugin_down),
     {reply, ok, State#state { plugin_up = PluginUp, plugin_down = PluginDown }};
-handle_call({subscribe, Pid, Options}, _From, State=#state {subs = Subs}) ->
+handle_call({subscribe, Pid, Options} = M, _From, State=#state {subs = Subs}) ->
+    lager:debug("message ~p", [M]),
     case lists:keyfind(Pid, #subscriber.pid, Subs) of
 	S when is_record(S, subscriber) ->
 	    {reply, ok, State};
@@ -260,7 +263,8 @@ handle_call({subscribe, Pid, Options}, _From, State=#state {subs = Subs}) ->
 	    Sub = #subscriber {pid = Pid, mon = Mon, options = Options},
 	    {reply, ok, State#state {subs = [Sub | Subs]}}
     end;
-handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
+handle_call({unsubscribe, Pid} = M, _From, State=#state {subs = Subs}) ->
+    lager:debug("message ~p", [M]),
     case lists:keytake(Pid, #subscriber.pid, Subs) of
 	false ->
 	    {reply, ok, State};
@@ -268,14 +272,17 @@ handle_call({unsubscribe, Pid}, _From, State=#state {subs = Subs}) ->
 	    erlang:demonitor(Mon, [flush]),
 	    {reply, ok, State#state {subs = NewSubs}}
     end;
-handle_call({inform, Type, Options}, _From, State=#state {subs = Subs }) ->
+handle_call({inform, Type, Options} = M, _From, State=#state {subs = Subs }) ->
+    lager:debug("message ~p", [M]),
     inform_subscribers({Type, Options}, Subs),
     {reply, ok, State};
     
-handle_call(event_list, _From, State=#state {evt_list = EList}) ->
+handle_call(event_list = M, _From, State=#state {evt_list = EList}) ->
+    lager:debug("message ~p", [M]),
     List = [{E#int_event.label, E#int_event.signal} || E <- EList],
     {reply, {ok, List}, State};
-handle_call({event_signal, Label}, _From, State=#state {evt_list = EList}) ->
+handle_call({event_signal, Label} = M, _From, State=#state {evt_list = EList}) ->
+    lager:debug("message ~p", [M]),
     case lists:keyfind(Label, #int_event.label, EList) of
 	#int_event {signal = Signal} ->
 	    {reply, {ok, Signal}, State};
@@ -283,9 +290,9 @@ handle_call({event_signal, Label}, _From, State=#state {evt_list = EList}) ->
 	    lager:debug("Unknown event ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
     end;
-handle_call({input_active, Label, Active}, _From, 
+handle_call({input_active, Label, Active} = M, _From, 
 	    State=#state {input_rules = IList}) ->
-    lager:debug("input_active: ~p to ~p\n", [Label, Active]),
+    lager:debug("message ~p", [M]),
     case lists:keytake(Label, #hex_input.label, IList) of
 	{value, I=#hex_input {flags = Flags}, Rest} ->
 	    case lists:keyfind(active, 1, Flags) of
@@ -871,8 +878,8 @@ inform_subscribers(Msg, [#subscriber {pid = Pid, options=Options} | Subs]) ->
 	    inform_subscribers(Msg, Subs)
     end.
 
-match_subscriber({_Type,Options}, MatchOptions) ->
-    R = match_options(Options, MatchOptions),
+match_subscriber({Type,Options}, MatchOptions) ->
+    R = match_options([{'event-type',Type}|Options], MatchOptions),
     lager:debug("match ~p with ~p = ~p\n", [Options, MatchOptions, R]),
     R.
 
@@ -893,7 +900,39 @@ match_options([{Key,Value}|Ks], MatchOptions) ->
 match_options([], _MatchOptions) ->
     true.
 	
+%% inform_subscribers({Type, Data} = Msg, 
+%% 		   [#subscriber {pid = Pid, options = Opts} | Subs]) ->
+%%     case proplists:get_value(type, Opts, all) of
+%% 	T when T =:= Type; T =:= all ->
+%% 	    case proplists:get_value(group, Opts, all) of
+%% 		all -> 
+%% 		    inform_subscribers(Msg, Pid, Opts);
+%% 		Groups ->
+%% 		    case lists:member(proplists:get_value(group, Data), Groups) of
+%% 			true -> inform_subscribers(Msg, Pid, Opts);
+%% 			false -> do_nothing
+%% 		    end
+%% 	    end;
+%% 	_Other ->
+%% 	    do_nothing
+%%     end,
+%%     inform_subscribers(Msg, Subs).
     
+%% inform_subscribers({_Type, Data} = Msg, Pid, Opts) ->
+%%     case proplists:get_value(item, Opts, all) of
+%% 	all ->
+%% 	    lager:debug("informing ~p of ~p", [Pid, Msg]),
+%% 	    Pid ! Msg;
+%% 	Items ->
+%% 	    case lists:member(proplists:get_value(label, Data), Items) of
+%% 		true ->
+%% 		    lager:debug("informing ~p of ~p", [Pid, Msg]),
+%% 		    Pid ! Msg;
+%% 		false ->
+%% 		    do_nothing
+%% 	    end
+%%     end.
+
 value2nid(Value) ->
     Id0 = Value bsr 8,
     Id  = if Id0 < 127 -> Id0;
