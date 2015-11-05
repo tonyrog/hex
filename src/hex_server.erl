@@ -337,8 +337,7 @@ handle_call({event_and_transmit, Label, Value}, _From,
 	    State=#state {evt_list = EList}) ->
     lager:debug("event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
-	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
-		     alarm = Alarm}, 1}
+	{#int_event {signal = Signal, alarm = Alarm}, 1}
 	  when Alarm =/= 0 ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_DIGITAL},
 	    alarm_confirm(Label, Signal1, State),
