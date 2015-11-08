@@ -35,6 +35,7 @@
 -define(HEX_OUTPUT_ADD,     16#2804).  %% Add output interface
 -define(HEX_OUTPUT_DEL,     16#2805).  %% Delete output interface
 -define(HEX_OUTPUT_ACTIVE,  16#2806).  %% Active/Deactivate signal
+-define(HEX_OUTPUT_VALUE,   16#280D).  %% Current value update
 
 -define(HEX_ALARM_CNFRM_ACK,16#2809).   %% Alarm ack code notification
 -define(HEX_ALARM_CNFRM,    16#280E).   %% Confirm larm condition (from client)

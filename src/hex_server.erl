@@ -83,6 +83,7 @@
 	  app_flags      :: [{Key::atom(), Value::term()}],
 	  signal         :: #hex_signal{},
 	  alarm=0        :: integer(), %% alarm id (0=ok)
+	  analog_value=0 :: integer(),
 	  active=false   :: boolean()  %% status of id:chan 
 	}).
 
@@ -619,7 +620,8 @@ run_event(Signal, Data, Rules, State)
 	?HEX_POWER_ON     -> run_power_on(Signal, Rules, State);
 	?HEX_OUTPUT_ADD   -> run_output_add(Signal, State);
         ?HEX_OUTPUT_DEL   -> run_output_del(Signal, State);
-        ?HEX_OUTPUT_ACTIVE -> run_output_act(Signal, State);
+        ?HEX_OUTPUT_ACTIVE -> run_output_action(active, Signal, State);
+        ?HEX_OUTPUT_VALUE -> run_output_action(value, Signal, State);
 	%% ?HEX_POWER_OFF -> run_power_off(Signal, Rules, State);
 	%% ?HEX_WAKEUP    -> run_wakeup(Signal, Rules, State);
 	?HEX_ALARM        -> run_alarm(Signal, State);
@@ -769,35 +771,50 @@ run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 run_output_del(_Id, _LChan, _Signal, [], State) ->
     State.
 
-run_output_act(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
-	       State=#state {map = Map}) ->
+run_output_action(Action, Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
+		  State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
     %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
-    run_output_act(Id, Chan, Value, Map, State).
+    run_output_action(Action, Id, Chan, Value, Map, State).
 
-run_output_act(Id, Chan, Active, 
+run_output_action(_Action, _Id, _Chan, _Value, [], State) ->
+    State;
+run_output_action(Action, Id, Chan, Value, 
 	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs}) ->
-    lager:debug("event ~p, active ~p", [Label, Active]),
-    NewElist = event_active(Label, Active, EList, [], Subs),
-    run_output_act(Id, Chan, Active, Map, State#state{evt_list = NewElist});
-run_output_act(Id, Chan, Active, [_MapItem | Map], State) ->
-    run_output_act(Id, Chan, Active, Map, State);
-run_output_act(_Id, _Chan, _Active, [], State) ->
-    State.
+    lager:debug("event ~p, ~p ~p", [Action, Label, Value]),
+    NewElist = event_action(Action, Label, Value, EList, [], Subs),
+    run_output_action(Action, Id, Chan, Value, Map, State#state{evt_list = NewElist});
+run_output_action(Action, Id, Chan, Value, [_MapItem | Map], State) ->
+    run_output_action(Action, Id, Chan, Value, Map, State).
 
-event_active(_Label, _Active, [], Acc, _Subs) ->
+
+event_action(_Action, _Label, _Value, [], Acc, _Subs) ->
     Acc;
-event_active(Label, Active, 
-	     [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
-	      Events], 
+event_action(Action, Label, Value, 
+	     [E=#int_event {label = Label} | Events], 
 	     Acc, Subs) ->
+    event_action(Action, Label, Value, Events, 
+		 [event_action(Action, E, Value, Subs)| Acc], Subs);
+event_action(Action, Label, Value, [E | Events], Acc, Subs) ->
+    event_action(Action, Label, Value, Events, [E | Acc], Subs).
+
+event_action(active, Event, Active, Subs) ->
+    event_active(Event, Active, Subs);
+event_action(value, Event, Value, Subs) ->
+    event_value(Event, Value, Subs).
+
+event_active(E=#int_event {label = Label, app = App, app_flags = AppFlags}, 
+	     Active, Subs) ->
     App:output(AppFlags, [{output_active, Active}]),
     inform_subscribers({'output-active', [{label, Label}, {value, Active}]}, Subs),
-    event_active(Label, Active, Events, 
-		 [E#int_event {active = (Active =/= 0)} | Acc], Subs);
-event_active(Label, Active, [E | Events], Acc, Subs) ->
-    event_active(Label, Active, Events, [E | Acc], Subs).
+    E#int_event {active = (Active =/= 0)}.
+
+event_value(E=#int_event {label = Label, app = App, app_flags = AppFlags},
+	   Value, Subs) ->
+    App:output(AppFlags, [{output_value, Value}]),
+    inform_subscribers({'output-value', [{label, Label}, {value, Value}]}, Subs),
+    E#int_event {analog_value = Value}.
 
 run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
