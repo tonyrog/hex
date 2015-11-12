@@ -806,6 +806,7 @@ event_action(value, Event, Value, Subs) ->
 
 event_active(E=#int_event {label = Label, app = App, app_flags = AppFlags}, 
 	     Active, Subs) ->
+    lager:debug("output-active event ~p, ~p ~p", [Label, Active, Subs]),
     App:output(AppFlags, [{output_active, Active}]),
     inform_subscribers([{'event-type','output-active'}, {label, Label}, {value, Active}], Subs),
     E#int_event {active = (Active =/= 0)}.
@@ -894,8 +895,8 @@ inform_subscribers(Msg, [#subscriber {pid = Pid, options=Options} | Subs]) ->
 	    inform_subscribers(Msg, Subs)
     end.
 
-match_subscriber({Type,Options}, MatchOptions) ->
-    R = match_options([{'event-type',Type}|Options], MatchOptions),
+match_subscriber(Options, MatchOptions) ->
+    R = match_options(Options, MatchOptions),
     lager:debug("match ~p with ~p = ~p\n", [Options, MatchOptions, R]),
     R.
 
