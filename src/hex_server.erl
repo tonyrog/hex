@@ -814,7 +814,7 @@ event_active(E=#int_event {label = Label, app = App, app_flags = AppFlags},
 event_value(E=#int_event {label = Label, app = App, app_flags = AppFlags},
 	   Value, Subs) ->
     App:output(AppFlags, [{output_value, Value}]),
-    inform_subscribers({'output-value', [{label, Label}, {value, Value}]}, Subs),
+    inform_subscribers([{'event-type','output-value'}, {label, Label}, {value, Value}], Subs),
     E#int_event {analog_value = Value}.
 
 run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
