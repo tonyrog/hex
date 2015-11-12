@@ -275,7 +275,7 @@ handle_call({unsubscribe, Pid} = M, _From, State=#state {subs = Subs}) ->
     end;
 handle_call({inform, Type, Options} = M, _From, State=#state {subs = Subs }) ->
     lager:debug("message ~p", [M]),
-    inform_subscribers({Type, Options}, Subs),
+    inform_subscribers([{'event-type',Type}] ++ Options, Subs),
     {reply, ok, State};
     
 handle_call(event_list = M, _From, State=#state {evt_list = EList}) ->
@@ -440,7 +440,7 @@ handle_info({init_plugin, AppName}, State) ->
 
 handle_info({inform, Type, Options}, State=#state {subs = Subs }) ->
     lager:debug("inform: ~p ~p", [Type, Options]),
-    inform_subscribers({Type, Options}, Subs),
+    inform_subscribers([{'event-type',Type}] ++ Options, Subs),
     {noreply, State};
 
 handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
@@ -807,7 +807,7 @@ event_action(value, Event, Value, Subs) ->
 event_active(E=#int_event {label = Label, app = App, app_flags = AppFlags}, 
 	     Active, Subs) ->
     App:output(AppFlags, [{output_active, Active}]),
-    inform_subscribers({'output-active', [{label, Label}, {value, Active}]}, Subs),
+    inform_subscribers([{'event-type','output-active'}, {label, Label}, {value, Active}], Subs),
     E#int_event {active = (Active =/= 0)}.
 
 event_value(E=#int_event {label = Label, app = App, app_flags = AppFlags},
@@ -839,7 +839,7 @@ event_alarm(Label, Alarm,
 	     Events], 
 	    Acc, Subs) ->
     App:output(AppFlags, [{alarm, Alarm}]),
-    inform_subscribers({alarm, [{label, Label}, {value, Alarm}]}, Subs),
+    inform_subscribers([{'event-type','alarm'},{label, Label}, {value, Alarm}], Subs),
     event_alarm(Label, Alarm, Events, [E#int_event {alarm = Alarm} | Acc], Subs);
 event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
     event_alarm(Label, Alarm, Events, [E | Acc], Subs).
@@ -877,7 +877,7 @@ event_alarm_confirm_ack(Label, Alarm,
 	     Events], 
 	    Acc, Subs) ->
     App:output(AppFlags, [{alarm_ack, 0}]),
-    inform_subscribers({alarm_ack, [{label, Label}]}, Subs),
+    inform_subscribers([{'event-type',alarm_ack}, {label, Label}], Subs),
     event_alarm_confirm_ack(Label, Alarm, Events, [E#int_event {alarm = 0} | Acc], Subs);
 event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->
     event_alarm_confirm_ack(Label, Alarm, Events, [E | Acc], Subs).
