@@ -281,6 +281,8 @@ func(emergency) -> ?EMERGENCY;
 func(F) when ?is_uint4(F) -> F.
 
 
+validate_event(hex_none = App, Dir, AppFlags) ->
+    validate_app_flags(App, Dir, AppFlags);
 validate_event(App, Dir, AppFlags) when is_atom(App) ->
     case application:load(App) of
 	ok ->
@@ -355,7 +357,7 @@ validate_action_expression(Expr) ->
 	    try hex_core:parse(Expr) of
 		_ -> ok
 	    catch
-		error:_ -> {error, expression_synax_error}
+		error:_ -> {error, expression_syntax_error}
 	    end;
        true ->
 	    {error, {bad_expr, Expr}}

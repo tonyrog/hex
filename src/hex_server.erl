@@ -1,6 +1,6 @@
 %%%---- BEGIN COPYRIGHT -------------------------------------------------------
 %%%
-%%% Copyright (C) 2007 - 2014, Rogvall Invest AB, <tony@rogvall.se>
+%%% Copyright (C) 2007 - 2015, Rogvall Invest AB, <tony@rogvall.se>
 %%%
 %%% This software is licensed as described in the file COPYRIGHT, which
 %%% you should have received as part of this distribution. The terms
@@ -16,10 +16,11 @@
 %%%---- END COPYRIGHT ---------------------------------------------------------
 %%%-------------------------------------------------------------------
 %%% @author Tony Rogvall <tony@rogvall.se>
+%%% @author Malotte W Lönne <malotte@malotte.net>
 %%% @doc
 %%%    Hex main processing server
+%%% Created :  3 Feb 2014 by Tony Rogvall
 %%% @end
-%%% Created :  3 Feb 2014 by Tony Rogvall <tony@rogvall.se>
 %%%-------------------------------------------------------------------
 -module(hex_server).
 
@@ -599,6 +600,8 @@ start_transmit([], State) ->
     State.
 
 
+start_plugin(hex_none = App, Dir, Flags) ->
+    init_plugin(App, Dir, Flags);
 start_plugin(App, Dir, Flags) ->
     case hex:start_all(App) of
 	{ok,[]} -> %% already started
@@ -611,14 +614,16 @@ start_plugin(App, Dir, Flags) ->
 	    Error
     end.
 
+init_plugin(none, Dir, Flags) ->
+    hex_none:init_event(Dir, Flags);
 init_plugin(App, Dir, Flags) ->
     lager:debug("init_event: ~p ~p", [App,Flags]),
     case App:init_event(Dir, Flags) of
 	ok ->
-	    lager:info("~w:~w event ~p initiated", [App,Dir,Flags]),
+	    lager:info("~w:~w flags ~p initiated", [App,Dir,Flags]),
 	    ok;
 	Error ->
-	    lager:info("~w:~w event ~p failed ~p", [App,Dir,Flags,Error]),
+	    lager:info("~w:~w flags ~p failed ~p", [App,Dir,Flags,Error]),
 	    Error
     end.
 
@@ -721,8 +726,11 @@ run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 	    if Id =:= SigNodeId,
 	       LChan =:= S#hex_signal.chan ->
 		    case is_mapped(Map, Label, RId, RChan) of
-			true ->
-			    run_output_add(Id, LChan, Signal, Events, State);
+			true -> 
+			    %% Resent output_add clears alarm
+			    NewState =
+				run_alarm(RId, RChan, 0, Map, State),
+			    run_output_add(Id, LChan, Signal, Events, NewState);
 			false ->
 			    MapItem = #map_item{label = Label,
 						id = RId,
@@ -765,9 +773,13 @@ run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 			true ->
 			    lager:debug("run_output_del: item ~p, ~p, ~p", 
 					[Label, RId, RChan]),
-			    NewMap = remove_mapped(Label, RId, RChan, Map, []),
+			    %% output_del clears alarms
+			    NewState =
+				run_alarm(RId, RChan, 0, Map, State),
+			    NewMap = remove_mapped(Label, RId, RChan,
+						   NewState#state.map, []),
 			    run_output_del(Id, LChan, Signal, Events, 
-					   State#state {map = NewMap});
+					   NewState#state {map = NewMap});
 			false ->
 			    run_output_del(Id, LChan, Signal, Events, State)
 		    end;
@@ -780,7 +792,8 @@ run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 run_output_del(_Id, _LChan, _Signal, [], State) ->
     State.
 
-run_output_action(Action, Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
+run_output_action(Action, 
+		  Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 		  State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
     %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
@@ -793,7 +806,8 @@ run_output_action(Action, Id, Chan, Value,
 	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
     lager:debug("event ~p, ~p ~p", [Action, Label, Value]),
     NewElist = event_action(Action, Label, Value, EList, [], Subs, DBs),
-    run_output_action(Action, Id, Chan, Value, Map, State#state{evt_list = NewElist});
+    run_output_action(Action, Id, Chan, Value, Map, 
+		      State#state{evt_list = NewElist});
 run_output_action(Action, Id, Chan, Value, [_MapItem | Map], State) ->
     run_output_action(Action, Id, Chan, Value, Map, State).
 
@@ -848,6 +862,11 @@ run_alarm(_Id, _Chan, _Alarm, [], State) ->
 
 event_alarm(_Label, _Alarm, [], Acc, _Subs, _DBs) ->
     Acc;
+event_alarm(Label, Alarm, 
+	    [E=#int_event {label = Label, alarm = Alarm} | Events], 
+	    Acc, Subs, DBs) ->
+    %% No change in alarm
+    event_alarm(Label, Alarm, Events, [E | Acc], Subs, DBs);
 event_alarm(Label, Alarm, 
 	    [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
 	     Events], 
