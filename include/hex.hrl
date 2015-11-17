@@ -40,6 +40,8 @@
 -define(HEX_ALARM_CNFRM_ACK,16#2809).   %% Alarm ack code notification
 -define(HEX_ALARM_CNFRM,    16#280E).   %% Confirm larm condition (from client)
 
+-define(HEX_OUTPUT_STATE,   16#2814).   %% output-active/output-value
+
 -define(HEX_COBID_EXT,      16#20000000).
 -define(HEX_XNODE_ID_MASK,  16#01FFFFFF).  %% 25 bit node id
 

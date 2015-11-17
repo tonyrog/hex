@@ -85,6 +85,7 @@
 	  signal         :: #hex_signal{},
 	  alarm=0        :: integer(), %% alarm id (0=ok)
 	  analog_value=0 :: integer(),
+	  state=0        :: integer(),
 	  active=false   :: boolean()  %% status of id:chan 
 	}).
 
@@ -636,6 +637,7 @@ run_event(Signal, Data, Rules, State)
         ?HEX_OUTPUT_DEL   -> run_output_del(Signal, State);
         ?HEX_OUTPUT_ACTIVE -> run_output_action(active, Signal, State);
         ?HEX_OUTPUT_VALUE -> run_output_action(value, Signal, State);
+        ?HEX_OUTPUT_STATE -> run_output_action(state, Signal, State);
 	%% ?HEX_POWER_OFF -> run_power_off(Signal, Rules, State);
 	%% ?HEX_WAKEUP    -> run_wakeup(Signal, Rules, State);
 	?HEX_ALARM        -> run_alarm(Signal, State);
@@ -825,7 +827,9 @@ event_action(Action, Label, Value, [E | Events], Acc, Subs, DBs) ->
 event_action(active, Event, Active, Subs, DBs) ->
     event_active(Event, Active, Subs, DBs);
 event_action(value, Event, Value, Subs, DBs) ->
-    event_value(Event, Value, Subs, DBs).
+    event_value(Event, Value, Subs, DBs);
+event_action(state, Event, Value, Subs, DBs) ->
+    event_state(Event, Value, Subs, DBs).
 
 event_active(E=#int_event {label = Label, app = App, app_flags = AppFlags}, 
 	     Active, Subs, DBs) ->
@@ -843,6 +847,15 @@ event_value(E=#int_event {label = Label, app = App, app_flags = AppFlags},
     inform_subscribers(Event, Subs),
     inform_dbs(Event, DBs),
     E#int_event {analog_value = Value}.
+
+event_state(E=#int_event {label = Label, app = App, app_flags = AppFlags},
+	   Value, Subs, DBs) ->
+    App:output(AppFlags, [{output_state, Value}]),
+    Event = [{'event-type','output-state'}, {label, Label}, {value, Value}],
+    inform_subscribers(Event, Subs),
+    inform_dbs(Event, DBs),
+    E#int_event {state = Value}.
+
 
 run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
