@@ -347,7 +347,7 @@ handle_call({event_and_transmit, Label, Value}, _From,
     lager:debug("event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
 	{#int_event {signal = Signal, alarm = Alarm}, 1}
-	  when Alarm =/= 0 ->
+	  when Alarm > 0 ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_DIGITAL},
 	    alarm_confirm(Label, Signal1, State),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
@@ -367,7 +367,7 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
 	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
 		     alarm = Alarm}, 1}
-	  when Alarm =/= 0 ->
+	  when Alarm > 0 ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
 	    alarm_confirm(Label, Signal1, State),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
@@ -865,7 +865,6 @@ run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
 run_alarm(Id, Chan, Alarm, 
 	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
-    lager:debug("event ~p, alarm ~p", [Label, Alarm]),
     NewElist = event_alarm(Label, Alarm, EList, [], Subs, DBs),
     run_alarm(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
 run_alarm(Id, Chan, Alarm, [_MapItem | Map], State) ->
@@ -878,12 +877,14 @@ event_alarm(_Label, _Alarm, [], Acc, _Subs, _DBs) ->
 event_alarm(Label, Alarm, 
 	    [E=#int_event {label = Label, alarm = Alarm} | Events], 
 	    Acc, Subs, DBs) ->
+    lager:debug("event ~p, old alarm ~p", [Label, Alarm]),
     %% No change in alarm
     event_alarm(Label, Alarm, Events, [E | Acc], Subs, DBs);
 event_alarm(Label, Alarm, 
 	    [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
 	     Events], 
 	    Acc, Subs, DBs) ->
+    lager:debug("event ~p, new alarm ~p", [Label, Alarm]),
     App:output(AppFlags, [{alarm, Alarm}]),
     Event = [{'event-type','alarm'},{label, Label}, {value, Alarm}],
     inform_subscribers(Event, Subs),
@@ -926,11 +927,11 @@ event_alarm_confirm_ack(Label, Alarm,
 	     Events], 
 	    Acc, Subs, DBs) ->
     App:output(AppFlags, [{alarm_ack, 0}]),
-    Event = [{'event-type',alarm_ack}, {label, Label}],
+    Event = [{'event-type', alarm_ack}, {label, Label}],
     inform_subscribers(Event, Subs),
     inform_dbs(Event, DBs),
     event_alarm_confirm_ack(Label, Alarm, Events, 
-			    [E#int_event {alarm = 0} | Acc], Subs, DBs);
+		[E#int_event {alarm = -1} | Acc], Subs, DBs);
 event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs, DBs) ->
     event_alarm_confirm_ack(Label, Alarm, Events, [E | Acc], Subs, DBs).
 
