@@ -71,9 +71,10 @@
 
 -record(map_item,
 	{
-	  label         :: integer() | atom(),          
-	  id            :: uint32(),  %% remote id
-	  channel       :: uint8()   %% remote channel number
+	  label          :: integer() | atom(),          
+	  nodeid         :: uint32(),  %% remote id
+	  channel        :: uint8(),   %% remote channel number
+	  type = dynamic :: static | dynamic 
 	}).
 
 -record(int_event,
@@ -211,8 +212,9 @@ create_map([], Acc) ->
     Acc;
 create_map([{Label, CobId, Chan} | Rest], Acc) ->
     create_map(Rest, [#map_item {label = Label,
-				 id = hex_config:pattern(CobId),
-				 channel = Chan} | Acc]).
+				 nodeid = hex_config:pattern(CobId),
+				 channel = Chan,
+				 type = static} | Acc]).
 
 %%--------------------------------------------------------------------
 %% @private
@@ -318,7 +320,6 @@ handle_call({input_active, Label, Active} = M, _From,
 		    {reply, ok, State#state {input_rules = [NewI | Rest]}}
 	    end;
 	false ->
-	    lager:debug("Unknown label ~p", [Label]),
 	    {reply, {error, unknown_input}, State}
     end;
 handle_call({input2pid, Label}, _From, 
@@ -615,7 +616,7 @@ start_plugin(App, Dir, Flags) ->
 	    Error
     end.
 
-init_plugin(none, Dir, Flags) ->
+init_plugin(hex_none, Dir, Flags) ->
     hex_none:init_event(Dir, Flags);
 init_plugin(App, Dir, Flags) ->
     lager:debug("init_event: ~p ~p", [App,Flags]),
@@ -648,6 +649,7 @@ run_event(Signal, Data, Rules, State)
 run_event_(Signal, Data, [Rule|Rules], State) ->
     case match_pattern(Signal, Data, Rule#hex_input.signal) of
 	{true, Type, Value} ->
+	    lager:debug("signal match ~p ~p", [Type, Value]),
 	    case active(Rule#hex_input.flags) of
 		true ->
 		    Src = Signal#hex_signal.source,
@@ -658,6 +660,7 @@ run_event_(Signal, Data, [Rule|Rules], State) ->
 		    run_event_(Signal, Data, Rules, State)
 	    end;
 	false ->
+	    lager:debug("signal no match", []),
 	    run_event_(Signal, Data, Rules, State)
     end;
 run_event_(_Signal, _Data, [], _State) ->
@@ -669,8 +672,13 @@ active([{active, false} | _Flags]) -> false;
 active([_Flag | Flags]) -> active(Flags).
     
 
-run_power_on(Signal, [Rule|Rules], State) ->
-    lager:debug("power on signal ~p", [Signal]),
+run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
+    lager:debug("run_power_on: ~p", [Signal]),
+    NewMap = remove_mapped(RId, Map, []),
+    lager:debug("old map ~p, new map ~p", [Map, NewMap]),
+    add_outputs(Signal, Rules, State#state{map = NewMap}).
+
+add_outputs(Signal, [Rule|Rules], State) ->
     RulePattern = Rule#hex_input.signal,
     if is_integer(Signal#hex_signal.id),
        Signal#hex_signal.id =:= RulePattern#hex_pattern.id,
@@ -679,11 +687,11 @@ run_power_on(Signal, [Rule|Rules], State) ->
 			RulePattern#hex_pattern.id,
 			RulePattern#hex_pattern.chan,
 			State),
-	    run_power_on(Signal, Rules, State);
+	    add_outputs(Signal, Rules, State);
        true ->
-	    run_power_on(Signal, Rules, State)
+	    add_outputs(Signal, Rules, State)
     end;
-run_power_on(_Signal, [], State) ->
+add_outputs(_Signal, [], State) ->
     State.
 
 add_outputs([{output,Output}|Flags], Rid, Rchan, State) ->
@@ -735,8 +743,9 @@ run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 			    run_output_add(Id, LChan, Signal, Events, NewState);
 			false ->
 			    MapItem = #map_item{label = Label,
-						id = RId,
-						channel = RChan},
+						nodeid = RId,
+						channel = RChan,
+						type = dynamic},
 			    lager:debug("run_output_add: item ~p", [MapItem]),
 			    run_output_add(Id, LChan, Signal, Events, 
 					   State#state {map = [MapItem | Map]})
@@ -804,7 +813,7 @@ run_output_action(Action,
 run_output_action(_Action, _Id, _Chan, _Value, [], State) ->
     State;
 run_output_action(Action, Id, Chan, Value, 
-	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
+	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
     lager:debug("event ~p, ~p ~p", [Action, Label, Value]),
     NewElist = event_action(Action, Label, Value, EList, [], Subs, DBs),
@@ -863,7 +872,7 @@ run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
     run_alarm(Id, Chan, Value, Map, State).
 
 run_alarm(Id, Chan, Alarm, 
-	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
+	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
     NewElist = event_alarm(Label, Alarm, EList, [], Subs, DBs),
     run_alarm(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
@@ -910,7 +919,7 @@ run_alarm_confirm_ack(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
     run_alarm_confirm_ack(Id, Chan, Value, Map, State).
 
 run_alarm_confirm_ack(Id, Chan, Alarm, 
-	       [#map_item {label = Label, id = Id, channel = Chan} | Map], 
+	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
 	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
     lager:debug("event ~p, alarm ~p", [Label, Alarm]),
     NewElist = event_alarm_confirm_ack(Label, Alarm, EList, [], Subs, DBs),
@@ -983,20 +992,29 @@ value2nid(Value) ->
     Chan = (Value band 16#ff),
     {Id, Chan}.
 
-is_mapped([#map_item{label=Label,id=Id,channel=Chan}|_Map],Label,Id,Chan) ->
+is_mapped([#map_item{label=Label,nodeid=Id,channel=Chan}|_Map],Label,Id,Chan) ->
     true;
 is_mapped([_|Map],Label,Id,Chan) ->
     is_mapped(Map,Label,Id,Chan);
 is_mapped([],_Label,_Id,_Chan) ->
     false.
 
+%% Remove specific item
 remove_mapped(_Label,_Id,_Chan,[],Acc) ->
     Acc;
 remove_mapped(Label,Id,Chan, 
-	      [#map_item{label=Label,id=Id,channel=Chan}|Map],Acc) ->
+	      [#map_item{label=Label,nodeid=Id,channel=Chan}|Map],Acc) ->
     remove_mapped(Label,Id,Chan,Map,Acc);
 remove_mapped(Label,Id,Chan,[MapItem|Map],Acc) ->
     remove_mapped(Label,Id,Chan,Map,[MapItem|Acc]).
+
+%% Remove all items on node Id.
+remove_mapped(_Id,[],Acc) ->
+    Acc;
+remove_mapped(Id, [#map_item{nodeid=Id}|Map],Acc) ->
+    remove_mapped(Id,Map,Acc);
+remove_mapped(Id,[MapItem|Map],Acc) ->
+    remove_mapped(Id,Map,[MapItem|Acc]).
 
 %% handle "distribution" messages when match
 run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
