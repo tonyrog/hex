@@ -660,7 +660,6 @@ run_event_(Signal, Data, [Rule|Rules], State) ->
 		    run_event_(Signal, Data, Rules, State)
 	    end;
 	false ->
-	    lager:debug("signal no match", []),
 	    run_event_(Signal, Data, Rules, State)
     end;
 run_event_(_Signal, _Data, [], _State) ->
