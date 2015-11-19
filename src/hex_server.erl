@@ -94,6 +94,7 @@
 	{
 	  pid  :: pid(),
 	  mon  :: reference(),
+	  cb :: {Module::atom(),Function::atom()} | undefined,
 	  options=[] :: [{Key::atom(), Value::term()}]
 	}).
 		  
@@ -109,8 +110,7 @@
 	  input_rules = [] :: [#hex_input{}],
 	  plugin_up = []   :: [{App::atom(), Mon::reference()}],
 	  plugin_down = [] :: [App::atom()],
-	  subs = []        :: [#subscriber{}],
-	  dbs = []         :: [{Module::atom(),Function::atom()}] 
+	  subs = []        :: [#subscriber{}] 
 	 }).
 
 %%%===================================================================
@@ -126,8 +126,8 @@ load(File) ->
 dump() ->
     gen_server:call(?SERVER, dump).
 
-subscribe(Options) ->
-    gen_server:call(?SERVER, {subscribe, self(), Options}).
+subscribe(Args) ->
+    gen_server:call(?SERVER, {subscribe, self(), Args}).
 
 unsubscribe() ->
     gen_server:call(?SERVER, {unsubscribe, self()}).
@@ -184,7 +184,6 @@ start_link(Options) ->
 init(Options) ->
     Tab = ets:new(?TABLE, [named_table]),
     Nodeid = proplists:get_value(nodeid, Options, 1),
-    DBs = proplists:get_value(databases, Options, []),
     Config =
 	case proplists:get_value(config, Options, default) of
 	    default ->
@@ -204,8 +203,7 @@ init(Options) ->
 		 config = Config,
 		 map = Map,
 		 tab = Tab,
-		 input_rules = [],
-		 dbs = DBs
+		 input_rules = []
 	       }}.
 
 create_map([], Acc) ->
@@ -261,14 +259,22 @@ handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid),
     PluginUp = [{AppName,AppMon} | State#state.plugin_up],
     PluginDown = lists:delete(AppName, State#state.plugin_down),
     {reply, ok, State#state { plugin_up = PluginUp, plugin_down = PluginDown }};
-handle_call({subscribe, Pid, Options} = M, _From, State=#state {subs = Subs}) ->
+handle_call({subscribe, Pid, Args} = M, _From, State=#state {subs = Subs}) ->
     lager:debug("message ~p", [M]),
     case lists:keyfind(Pid, #subscriber.pid, Subs) of
 	S when is_record(S, subscriber) ->
 	    {reply, ok, State};
 	false ->
 	    Mon = erlang:monitor(process, Pid),
-	    Sub = #subscriber {pid = Pid, mon = Mon, options = Options},
+	    Sub = case Args of
+		      {Module, Function, Options} ->
+			  #subscriber {pid = Pid, mon = Mon, 
+				       cb = {Module, Function}, 
+				       options = Options};
+		      Options when is_list(Options) ->
+			  #subscriber {pid = Pid, mon = Mon, 
+				       options = Options}
+		      end,
 	    {reply, ok, State#state {subs = [Sub | Subs]}}
     end;
 handle_call({unsubscribe, Pid} = M, _From, State=#state {subs = Subs}) ->
@@ -281,11 +287,10 @@ handle_call({unsubscribe, Pid} = M, _From, State=#state {subs = Subs}) ->
 	    {reply, ok, State#state {subs = NewSubs}}
     end;
 handle_call({inform, Type, Options} = M, _From, 
-	    State=#state {subs = Subs, dbs = DBs}) ->
+	    State=#state {subs = Subs}) ->
     lager:debug("message ~p", [M]),
     Event = [{'event-type',Type}] ++ Options,
     inform_subscribers(Event, Subs),
-    inform_dbs(Event, DBs),
     {reply, ok, State};
     
 handle_call(event_list = M, _From, State=#state {evt_list = EList}) ->
@@ -384,7 +389,7 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
     end;
 handle_call(dump, _From, State) ->
     io:format("State ~p", [State]),
-    {reply, ok, State};
+    {reply, State, State};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -448,11 +453,10 @@ handle_info({init_plugin, AppName}, State) ->
     {noreply, State};
 
 handle_info({inform, Type, Options}, 
-	    State=#state {subs = Subs, dbs = DBs}) ->
+	    State=#state {subs = Subs}) ->
     lager:debug("inform: ~p ~p", [Type, Options]),
     Event = [{'event-type',Type}] ++ Options,
     inform_subscribers(Event, Subs),
-    inform_dbs(Event, DBs),
     {noreply, State};
 
 handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
@@ -813,55 +817,52 @@ run_output_action(_Action, _Id, _Chan, _Value, [], State) ->
     State;
 run_output_action(Action, Id, Chan, Value, 
 	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
-	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
+	       State=#state{evt_list = EList, subs = Subs}) ->
     lager:debug("event ~p, ~p ~p", [Action, Label, Value]),
-    NewElist = event_action(Action, Label, Value, EList, [], Subs, DBs),
+    NewElist = event_action(Action, Label, Value, EList, [], Subs),
     run_output_action(Action, Id, Chan, Value, Map, 
 		      State#state{evt_list = NewElist});
 run_output_action(Action, Id, Chan, Value, [_MapItem | Map], State) ->
     run_output_action(Action, Id, Chan, Value, Map, State).
 
 
-event_action(_Action, _Label, _Value, [], Acc, _Subs, _DBs) ->
+event_action(_Action, _Label, _Value, [], Acc, _Subs) ->
     Acc;
 event_action(Action, Label, Value, 
 	     [E=#int_event {label = Label} | Events], 
-	     Acc, Subs, DBs) ->
+	     Acc, Subs) ->
     event_action(Action, Label, Value, Events, 
-		 [event_action(Action, E, Value, Subs, DBs)| Acc], Subs, DBs);
-event_action(Action, Label, Value, [E | Events], Acc, Subs, DBs) ->
-    event_action(Action, Label, Value, Events, [E | Acc], Subs, DBs).
+		 [event_action(Action, E, Value, Subs)| Acc], Subs);
+event_action(Action, Label, Value, [E | Events], Acc, Subs) ->
+    event_action(Action, Label, Value, Events, [E | Acc], Subs).
 
-event_action(active, Event, Active, Subs, DBs) ->
-    event_active(Event, Active, Subs, DBs);
-event_action(value, Event, Value, Subs, DBs) ->
-    event_value(Event, Value, Subs, DBs);
-event_action(state, Event, Value, Subs, DBs) ->
-    event_state(Event, Value, Subs, DBs).
+event_action(active, Event, Active, Subs) ->
+    event_active(Event, Active, Subs);
+event_action(value, Event, Value, Subs) ->
+    event_value(Event, Value, Subs);
+event_action(state, Event, Value, Subs) ->
+    event_state(Event, Value, Subs).
 
 event_active(E=#int_event {label = Label, app = App, app_flags = AppFlags}, 
-	     Active, Subs, DBs) ->
-    lager:debug("output-active event ~p, ~p ~p ~p", [Label, Active, Subs, DBs]),
+	     Active, Subs) ->
+    lager:debug("output-active event ~p ~p ~p", [Label, Active, Subs]),
     App:output(AppFlags, [{output_active, Active}]),
     Event = [{'event-type','output-active'}, {label, Label}, {value, Active}],
     inform_subscribers(Event, Subs),
-    inform_dbs(Event, DBs),
     E#int_event {active = (Active =/= 0)}.
 
 event_value(E=#int_event {label = Label, app = App, app_flags = AppFlags},
-	   Value, Subs, DBs) ->
+	   Value, Subs) ->
     App:output(AppFlags, [{output_value, Value}]),
     Event = [{'event-type','output-value'}, {label, Label}, {value, Value}],
     inform_subscribers(Event, Subs),
-    inform_dbs(Event, DBs),
     E#int_event {analog_value = Value}.
 
 event_state(E=#int_event {label = Label, app = App, app_flags = AppFlags},
-	   Value, Subs, DBs) ->
+	   Value, Subs) ->
     App:output(AppFlags, [{output_state, Value}]),
     Event = [{'event-type','output-state'}, {label, Label}, {value, Value}],
     inform_subscribers(Event, Subs),
-    inform_dbs(Event, DBs),
     E#int_event {state = Value}.
 
 
@@ -872,35 +873,34 @@ run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
 
 run_alarm(Id, Chan, Alarm, 
 	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
-	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
-    NewElist = event_alarm(Label, Alarm, EList, [], Subs, DBs),
+	       State=#state{evt_list = EList, subs = Subs}) ->
+    NewElist = event_alarm(Label, Alarm, EList, [], Subs),
     run_alarm(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
 run_alarm(Id, Chan, Alarm, [_MapItem | Map], State) ->
     run_alarm(Id, Chan, Alarm, Map, State);
 run_alarm(_Id, _Chan, _Alarm, [], State) ->
     State.
 
-event_alarm(_Label, _Alarm, [], Acc, _Subs, _DBs) ->
+event_alarm(_Label, _Alarm, [], Acc, _Subs) ->
     Acc;
 event_alarm(Label, Alarm, 
 	    [E=#int_event {label = Label, alarm = Alarm} | Events], 
-	    Acc, Subs, DBs) ->
+	    Acc, Subs) ->
     lager:debug("event ~p, old alarm ~p", [Label, Alarm]),
     %% No change in alarm
-    event_alarm(Label, Alarm, Events, [E | Acc], Subs, DBs);
+    event_alarm(Label, Alarm, Events, [E | Acc], Subs);
 event_alarm(Label, Alarm, 
 	    [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
 	     Events], 
-	    Acc, Subs, DBs) ->
+	    Acc, Subs) ->
     lager:debug("event ~p, new alarm ~p", [Label, Alarm]),
     App:output(AppFlags, [{alarm, Alarm}]),
     Event = [{'event-type','alarm'},{label, Label}, {value, Alarm}],
     inform_subscribers(Event, Subs),
-    inform_dbs(Event, DBs),
     event_alarm(Label, Alarm, Events, 
-		[E#int_event {alarm = Alarm} | Acc], Subs, DBs);
-event_alarm(Label, Alarm, [E | Events], Acc, Subs, DBs) ->
-    event_alarm(Label, Alarm, Events, [E | Acc], Subs, DBs).
+		[E#int_event {alarm = Alarm} | Acc], Subs);
+event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
+    event_alarm(Label, Alarm, Events, [E | Acc], Subs).
 
 
 alarm_confirm(Label, #hex_signal{id = Id, chan = Chan}, State) ->
@@ -919,43 +919,42 @@ run_alarm_confirm_ack(Signal=#hex_signal {id = Id, chan = Chan, value = Value},
 
 run_alarm_confirm_ack(Id, Chan, Alarm, 
 	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
-	       State=#state{evt_list = EList, subs = Subs, dbs = DBs}) ->
+	       State=#state{evt_list = EList, subs = Subs}) ->
     lager:debug("event ~p, alarm ~p", [Label, Alarm]),
-    NewElist = event_alarm_confirm_ack(Label, Alarm, EList, [], Subs, DBs),
+    NewElist = event_alarm_confirm_ack(Label, Alarm, EList, [], Subs),
     run_alarm_confirm_ack(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
 run_alarm_confirm_ack(Id, Chan, Alarm, [_MapItem | Map], State) ->
     run_alarm_confirm_ack(Id, Chan, Alarm, Map, State);
 run_alarm_confirm_ack(_Id, _Chan, _Alarm, [], State) ->
     State.
 
-event_alarm_confirm_ack(_Label, _Alarm, [], Acc, _Subs, _DBs) ->
+event_alarm_confirm_ack(_Label, _Alarm, [], Acc, _Subs) ->
     Acc;
 event_alarm_confirm_ack(Label, Alarm, 
 	    [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
 	     Events], 
-	    Acc, Subs, DBs) ->
+	    Acc, Subs) ->
     App:output(AppFlags, [{alarm_ack, 0}]),
     Event = [{'event-type', alarm_ack}, {label, Label}],
     inform_subscribers(Event, Subs),
-    inform_dbs(Event, DBs),
     event_alarm_confirm_ack(Label, Alarm, Events, 
-		[E#int_event {alarm = -1} | Acc], Subs, DBs);
-event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs, DBs) ->
-    event_alarm_confirm_ack(Label, Alarm, Events, [E | Acc], Subs, DBs).
-
-inform_dbs(_Msg, []) ->
-    ok;
-inform_dbs(Msg, [{Module, Function} | DBs]) ->
-    Module:Function(Msg),
-    inform_dbs(Msg, DBs).
+		[E#int_event {alarm = -1} | Acc], Subs);
+event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->
+    event_alarm_confirm_ack(Label, Alarm, Events, [E | Acc], Subs).
 
 inform_subscribers(_Msg, []) ->
     ok;
-inform_subscribers(Msg, [#subscriber {pid = Pid, options=Options} | Subs]) ->
-    case match_subscriber(Msg, Options) of
+inform_subscribers(Msg, [#subscriber {pid = Pid, cb = CB, options=Opts} | Subs]) ->
+    case match_subscriber(Msg, Opts) of
 	true ->
-	    lager:debug("informing ~p of ~p", [Pid, Msg]),
-	    Pid ! Msg,
+	    case CB of
+		{Module, Function} ->
+		    lager:debug("calling ~p:~p(~p)", [Module, Function, Msg]),
+		    Module:Function(Msg);
+		undefined ->
+		    lager:debug("informing ~p of ~p", [Pid, Msg]),
+		    Pid ! Msg
+	    end,
 	    inform_subscribers(Msg, Subs);
 	false ->
 	    inform_subscribers(Msg, Subs)

@@ -31,7 +31,7 @@
 -export([is_string/1]).
 -export([pp_yang/1]).
 -export([save_yang/2]).
--export([subscribe/0, subscribe/1, unsubscribe/0]).
+-export([subscribe/0, subscribe/1, subscribe/3, unsubscribe/0]).
 -export([inform/2]).
 -export([event/1, event/2]).
 -export([event_and_transmit/2]).
@@ -117,7 +117,12 @@ join(Name) when is_atom(Name) ->
 %%
 %% Subscribe to alarms and output_active signals received by hex.
 %%
-subscribe(Options) ->
+subscribe(Module, Function, Options) 
+  when is_atom(Module), is_atom(Function), is_list(Options) ->
+    hex_server:subscribe({Module, Function, Options}).
+
+subscribe(Options) 
+  when is_list(Options) ->
     hex_server:subscribe(Options).
 
 subscribe() ->
