@@ -33,6 +33,7 @@
 -export([save_yang/2]).
 -export([subscribe/0, subscribe/1, subscribe/3, unsubscribe/0]).
 -export([inform/2]).
+-export([add/1]).
 -export([event/1, event/2]).
 -export([event_and_transmit/2]).
 -export([analog_event_and_transmit/2]).
@@ -134,6 +135,9 @@ unsubscribe() ->
 inform(Type, Options) ->
     hex_server:inform(Type, Options).
 
+add(Config) 
+  when is_list(Config) ->
+    hex_server:add(Config).
 %%
 %% Event access
 %%

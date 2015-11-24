@@ -28,6 +28,7 @@
 -include("../include/hex.hrl").
 %% API
 -export([start_link/2]).
+-export([stop/1]).
 -export([validate_flags/1]).
 -export([setopts/2]).
 -export([getopts/2]).
@@ -298,6 +299,9 @@ start_link(Flags, Actions) ->
     FsmOptions = [],
     %% FsmOptions = [{debug,[trace]}],
     gen_fsm:start_link(?MODULE, {Flags,Actions}, FsmOptions).
+
+stop(Pid) ->
+    gen_fsm:stop(Pid, normal, 5000).
 
 %%%===================================================================
 %%% gen_fsm callbacks

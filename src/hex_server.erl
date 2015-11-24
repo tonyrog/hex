@@ -29,7 +29,8 @@
 %% API
 -export([start_link/1]).
 -export([reload/0, 
-	 load/1, 
+	 load/1,
+	 add/1,
 	 dump/0]).
 -export([subscribe/1,
 	 unsubscribe/0]).
@@ -66,6 +67,7 @@
 
 -define(SERVER, ?MODULE).
 -define(TABLE, hex_table).
+-define(OWNERTABLE, hex_item_owners).
 
 -type config() :: term().
 
@@ -100,8 +102,9 @@
 		  
 -record(state, {
 	  config = default :: default | {file,string()} | [config()],
-	  nodeid = 0 :: integer(),
-	  tab :: ets:tab(),
+	  nodeid = 0       :: integer(),
+	  tab              :: ets:tab(),
+	  owner_table      :: ets:tab(),
 	  out_list = []    :: [{Label::integer(), Pid::pid()}],
 	  in_list  = []    :: [{Label::integer(), Pid::pid()}],
 	  evt_list = []    :: [#int_event{}],
@@ -110,7 +113,8 @@
 	  input_rules = [] :: [#hex_input{}],
 	  plugin_up = []   :: [{App::atom(), Mon::reference()}],
 	  plugin_down = [] :: [App::atom()],
-	  subs = []        :: [#subscriber{}] 
+	  subs = []        :: [#subscriber{}],
+	  owners = []      :: [{Pid::pid(), Mon::reference()}]
 	 }).
 
 %%%===================================================================
@@ -120,8 +124,13 @@
 reload() ->
     gen_server:call(?SERVER, reload).
 
-load(File) ->
+load(File) 
+  when is_list(File) ->
     gen_server:call(?SERVER, {load, File}).
+
+add(Config)  
+  when is_list(Config) ->
+    gen_server:call(?SERVER, {add, Config, self()}).
 
 dump() ->
     gen_server:call(?SERVER, dump).
@@ -132,7 +141,8 @@ subscribe(Args) ->
 unsubscribe() ->
     gen_server:call(?SERVER, {unsubscribe, self()}).
 
-inform(Type, Options) ->
+inform(Type, Options)   
+  when is_atom(Type), is_list(Options)->
     ?SERVER ! {inform, Type, Options}.
 
 event_list() ->
@@ -183,6 +193,7 @@ start_link(Options) ->
 %%--------------------------------------------------------------------
 init(Options) ->
     Tab = ets:new(?TABLE, [named_table]),
+    OwnerTab = ets:new(?OWNERTABLE, [bag, named_table]),
     Nodeid = proplists:get_value(nodeid, Options, 1),
     Config =
 	case proplists:get_value(config, Options, default) of
@@ -203,6 +214,7 @@ init(Options) ->
 		 config = Config,
 		 map = Map,
 		 tab = Tab,
+		 owner_table = OwnerTab,
 		 input_rules = []
 	       }}.
 
@@ -235,7 +247,7 @@ handle_call({load,File} = M, _From, State) ->
 	    File1 = hex:text_expand(File,[]),
 	    case reload(File1, State) of
 		{ok,State1} ->
-		    {reply, ok, State1#state { config={file,File1}}};
+		    {reply, ok, State1#state {config={file,File1}}};
 		Error ->
 		    {reply, Error, State}
 	    end;
@@ -247,6 +259,20 @@ handle_call(reload = M, _From, State) ->
     case reload(State#state.config, State) of
 	{ok,State1} ->
 	    {reply, ok, State1};
+	Error ->
+	    {reply, Error, State}
+    end;
+handle_call({add, Config, Owner} = M, _From, State=#state {owners = Owners}) ->
+    lager:debug("message ~p", [M]),
+    case add(Config, Owner, State) of
+	{ok, State1} ->
+	    case lists:keyfind(Owner, 1, Owners) of
+		{Owner, _Mon}->
+		    {reply, ok, State1};
+		false ->
+		    Mon = erlang:monitor(process, Owner),
+	    	    {reply, ok, State1#state {owners = [{Owner, Mon} | Owners]}}
+	    end;
 	Error ->
 	    {reply, Error, State}
     end;
@@ -464,7 +490,16 @@ handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
 	false ->
 	    case lists:keytake(Ref, #subscriber.mon, State#state.subs) of
 		false ->
-		    {noreply, State};
+		    case lists:keytake(Ref, 2, State#state.owners) of
+			false ->
+			    {noreply, State};
+			{value, {Pid, Ref}, NewOwners} ->
+			    lager:warning("owner DOWN: ~p reason=~p", 
+					  [Pid,_Reason]),
+			    State1 = remove(Pid, State),
+			    ets:delete(State1#state.owner_table, Pid),
+			    {noreply, State1#state {owners = NewOwners}}
+		    end;
 		{value, #subscriber {pid = Pid}, NewSubs} ->
 		    lager:warning("subscriber DOWN: ~p reason=~p", 
 				  [Pid,_Reason]),
@@ -512,23 +547,26 @@ code_change(_OldVsn, State, _Extra) ->
 reload({file,File}, State) ->
     case file:consult(File) of
 	{ok,Config} ->
-	    rescan(Config, File, State);
+	    rescan(Config, File, self(), State);
 	Error={error,Reason} ->
 	    io:format("~s: file error:  ~p\n", [File,Reason]),
 	    lager:error("error loading file ~s\n~p", [File,Reason]),
 	    Error
     end;
 reload(Config, State) ->
-    rescan(Config, "*config*", State).
+    rescan(Config, "*config*", self(), State).
 
+add(Config, Owner, State) ->
+    lager:debug("Adding ~p",[Config]),
+    rescan(Config, "*add-call*", Owner, State).
 
-rescan(Config, File, State) ->
+rescan(Config, File, Owner, State) ->
     case hex_config:scan(Config) of
 	{ok,{Evt,In,Out,Trans}} ->
-	    State1 = start_outputs(Out, State),
-	    State2 = start_inputs(In, State1),
-	    State3 = start_events(Evt, State2),
-	    State4 = start_transmit(Trans, State3),
+	    State1 = start_outputs(Out, Owner, State),
+	    State2 = start_inputs(In, Owner, State1),
+	    State3 = start_events(Evt, Owner, State2),
+	    State4 = start_transmits(Trans, Owner, State3),
 	    {ok, State4#state { input_rules = In }};
 	Error={error,Reason} ->
 	    io:format("config error ~p\n", [Reason]),
@@ -537,8 +575,22 @@ rescan(Config, File, State) ->
     end.
 
 
-start_outputs([#hex_output { label=L, flags=Flags, actions=Actions} | Out],
-	      State) ->
+start_outputs([O=#hex_output {label=L} | Out], Owner,
+	      State=#state {tab = Tab, out_list = OutList}) ->
+    NewOutList = 
+	case ets:lookup(Tab, {output, L}) of
+	    [] -> 
+		start_output(O, Owner, State);
+	    [_Tuple] ->
+		lager:warning("output ~p already defined, skipping", [L]),
+		%% Replacing ??
+		OutList
+	end,
+    start_outputs(Out, Owner, State#state { out_list = NewOutList });
+start_outputs([], _Owner, State) ->
+    State.
+
+start_output(#hex_output {label=L, flags=Flags, actions=Actions}, Owner, State) ->
     case Actions of
 	{App,AppFlags} ->
 	    lager:debug("start_output: ~p ~p", [App,AppFlags]),
@@ -554,57 +606,94 @@ start_outputs([#hex_output { label=L, flags=Flags, actions=Actions} | Out],
     Flags1 = [{nodeid,State#state.nodeid},{chan,L}|Flags],
     {ok,Pid} = hex_output:start_link(Flags1, Actions),
     ets:insert(State#state.tab, {{output,L}, Pid}),
-    OutList = [{L,Pid} | State#state.out_list],
-    start_outputs(Out, State#state { out_list = OutList });
-start_outputs([], State) ->
+    ets:insert(State#state.owner_table, {Owner, {output,L}}),
+    [{L,Pid} | State#state.out_list].
+    
+start_inputs([I=#hex_input {label=L} | In], Owner,
+	     State=#state {tab = Tab, in_list = InList}) ->
+    NewInList =
+	case ets:lookup(Tab, {input, L}) of
+	    [] -> 
+		start_input(I, Owner, State);
+	    [_Tuple] ->
+		lager:warning("input ~p already defined, skipping", [L]),
+		%% Replacing ??
+		InList
+	end,
+    start_inputs(In, Owner, State#state {in_list = NewInList});
+start_inputs([], _Owner, State) ->
     State.
 
-start_inputs([#hex_input { label=L, flags = Flags } | In],
-	     State) ->
+start_input(#hex_input {label=L, flags = Flags}, Owner, State) ->
     {ok,Pid} = hex_input:start_link([{id,L}|Flags]),
     ets:insert(State#state.tab, {{input,L}, Pid}),
-    InList = [{L,Pid} | State#state.in_list],
-    start_inputs(In, State#state { in_list = InList });
-start_inputs([], State) ->
-    State.
+    ets:insert(State#state.owner_table, {Owner, {input,L}}),
+    [{L,Pid} | State#state.in_list].
 
 %% start
-start_events([#hex_event { label=L,app=App,app_flags=AppFlags,signal=Signal } | Evt],
-	     State) ->
+start_events([E=#hex_event {label=L} | Evt], Owner,
+	     State=#state{evt_list = EList}) ->
+    NewEList =
+	case lists:keyfind(L, #int_event.label, EList) of
+	    false -> 
+		start_event(E, Owner, State);
+	    _Tuple ->
+		lager:warning("event ~p already defined, skipping", [L]),
+		%% Replacing ??
+		EList
+	end,
+    start_events(Evt, Owner, State#state{evt_list = NewEList});
+start_events([], _Owner, State) ->
+    State.
+
+start_event(#hex_event {label=L, app=App, app_flags=AppFlags, signal=Signal}, 
+	    Owner, State=#state{evt_list = EList}) ->
     lager:debug("start_plugin: ~p ~p", [App,AppFlags]),
     case start_plugin(App, in, AppFlags) of
 	ok ->
 	    case App:add_event(AppFlags, Signal, ?MODULE) of
-		{ok,Ref} ->
+		{ok, Ref} ->
 		    lager:debug("event ~w started ~w", [L, Ref]),
-		    EvtList = [#int_event{ label = L, ref = Ref, app = App,
-					   app_flags = AppFlags, 
-					   signal = Signal} | 
-			       State#state.evt_list],
-		    start_events(Evt, State#state { evt_list = EvtList });
+		    ets:insert(State#state.owner_table, {Owner, {event,L}}),
+		    [#int_event{ label = L, 
+				 ref = Ref, 
+				 app = App,
+				 app_flags = AppFlags, 
+				 signal = Signal} | EList];
 		Error ->
 		    lager:error("unable to add_event: ~p ~p: ~p",
 				[App,AppFlags,Error]),
-		    start_events(Evt, State)
+		    EList
 	    end;
 	_Error ->
-	    start_events(Evt, State)
-    end;
-start_events([], State) ->
+	    EList
+    end.
+
+
+start_transmits([T=#hex_transmit {label=L } | Ts], Owner,   
+		State=#state {transmit_rules = Rules}) ->
+    NewRules =
+	case lists:keyfind(L, #hex_transmit.label, Rules) of
+	    false -> 
+		start_transmit(T, Owner, State);
+	    _Tuple ->
+		lager:warning("transmit ~p already defined, skipping", [L]),
+		%% Replacing ??
+		Rules
+	end,
+    start_transmits(Ts, Owner, State#state {transmit_rules = NewRules});
+start_transmits([], _Owner, State) ->
     State.
 
-start_transmit([T=#hex_transmit { app=App,flags=Flags } |
-		Ts],   State) ->
+start_transmit(T=#hex_transmit {label=L, app=App, flags=Flags}, Owner,   
+	       State=#state {transmit_rules = Rules}) ->    
     case start_plugin(App, out, Flags) of
 	ok ->
-	    Rules = [T | State#state.transmit_rules],
-	    start_transmit(Ts, State#state { transmit_rules = Rules });
+	    ets:insert(State#state.owner_table, {Owner, {transmit,L}}),
+	    [T | State#state.transmit_rules];
 	_Error ->
-	    start_transmit(Ts, State)
-    end;
-start_transmit([], State) ->
-    State.
-
+	    Rules
+    end.
 
 start_plugin(hex_none = App, Dir, Flags) ->
     init_plugin(App, Dir, Flags);
@@ -629,9 +718,89 @@ init_plugin(App, Dir, Flags) ->
 	    lager:info("~w:~w flags ~p initiated", [App,Dir,Flags]),
 	    ok;
 	Error ->
-	    lager:info("~w:~w flags ~p failed ~p", [App,Dir,Flags,Error]),
+	    lager:warning("~w:~w flags ~p failed ~p", [App,Dir,Flags,Error]),
 	    Error
     end.
+
+remove(Owner, State=#state {owner_table = OwnerTab}) -> 
+    remove_all(ets:lookup(OwnerTab, Owner), State).
+    
+remove_all([], State) ->
+    State;
+remove_all([{_Owner, {transmit, L}} | Rest], State) ->
+    NewState = remove_transmit(L, State),
+    remove_all(Rest, NewState);
+remove_all([{_Owner, {event, L}} | Rest], State) ->
+    NewState = remove_event(L, State),
+    remove_all(Rest, NewState);
+remove_all([{_Owner, {input, L}} | Rest], State) ->
+    NewState = remove_input(L, State),
+    remove_all(Rest, NewState);
+remove_all([{_Owner, {output, L}} | Rest], State) ->
+    NewState = remove_output(L, State),
+    remove_all(Rest, NewState).
+
+remove_transmit(L, State=#state {transmit_rules = Rules}) ->
+    NewRules =
+	case lists:keytake(L, #hex_transmit.label, Rules) of
+	    false ->
+		lager:warning("transmit ~p not found", [L]),
+		Rules;
+	    {value, _T, R} ->
+		lager:debug("transmit ~p removed", [L]),
+		R
+    end,
+    State#state {transmit_rules = NewRules}.
+
+remove_event(L, State=#state {evt_list = EList}) ->
+    NewEList =
+	case lists:keytake(L, #int_event.label, EList) of
+	    false ->
+		lager:warning("event ~p not found", [L]),
+		EList;
+	    {value, #int_event {ref = Ref, app = App}, E} ->
+		App:del_event(Ref),
+		lager:debug("event ~p removed", [L]),
+		E
+    end,
+    State#state {evt_list = NewEList}.
+
+remove_input(L, State=#state {tab = Tab, in_list = IList, input_rules = IRules}) ->
+    ets:delete(Tab, {input, L}),
+    case lists:keytake(L, 1, IList) of
+	false ->
+	    lager:warning("input ~p not found", [L]),
+	    State;
+	{value, {L, Pid}, NewIList} ->
+	    hex_input:stop(Pid),
+	    case lists:keytake(L, #hex_input.label, IRules) of
+		false ->
+		    lager:warning("input rule ~p not found", [L]),
+		    State#state {in_list = NewIList};
+		{value, _I, NewIRules} ->
+		    lager:debug("input ~p removed", [L]),
+		    State#state {in_list = NewIList, input_rules = NewIRules}
+	    end
+    end.
+
+remove_output(L, State=#state {tab = Tab, out_list = OList, map = Map}) ->
+    ets:delete(Tab, {output, L}),
+    case lists:keytake(L, 1, OList) of
+	false ->
+	    lager:warning("output ~p not found", [L]),
+	    State;
+	{value, {L, Pid}, NewOList} ->
+	    hex_output:stop(Pid),
+	    lager:debug("output ~p removed", [L]),
+	    case lists:keytake(L, #map_item.label, Map) of
+		false ->
+		    State#state {out_list = NewOList};
+		{value, _M, NewMap} ->
+		    lager:debug("output ~p removed from map", [L]),
+		    State#state {out_list = NewOList, map = NewMap}
+	    end
+    end.
+
 
 run_event(Signal, Data, Rules, State) 
   when is_record(Signal, hex_signal) ->

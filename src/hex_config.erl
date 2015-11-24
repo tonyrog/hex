@@ -48,7 +48,6 @@
 scan(Rules) ->
     scan_(Rules, [],[],[],[],[]).
 
-
 scan_([R | Rs], E, I, O, T, Err) ->
     case R of
 	{event,Label,{App,AppFlags},Event} when is_atom(App) -> %% old form

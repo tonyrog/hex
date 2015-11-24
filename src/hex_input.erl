@@ -28,6 +28,7 @@
 -include("../include/hex.hrl").
 %% API
 -export([start_link/1]).
+-export([stop/1]).
 -export([validate_flags/1]).
 -export([event_spec/0]).
 
@@ -289,6 +290,9 @@ event_spec() ->
 %%--------------------------------------------------------------------
 start_link(Flags) ->
     gen_fsm:start_link(?MODULE, Flags, []).
+
+stop(Pid) ->
+    gen_fsm:stop(Pid, normal, 5000).
 
 %%%===================================================================
 %%% gen_fsm callbacks
