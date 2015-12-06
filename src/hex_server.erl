@@ -31,7 +31,8 @@
 -export([reload/0, 
 	 load/1,
 	 add/1,
-	 dump/0]).
+	 dump/0,
+	 dump_map/0]).
 -export([subscribe/1,
 	 unsubscribe/0]).
 -export([inform/2]).
@@ -68,6 +69,13 @@
 -define(SERVER, ?MODULE).
 -define(TABLE, hex_table).
 -define(OWNERTABLE, hex_item_owners).
+
+%% HARD DEBUG
+-define(dbg(F), ok).
+-define(dbg(F,A), ok).
+%% -define(dbg(F,A), io:format((F),(A))).
+%% -define(dbg(F), io:format((F))).
+
 
 -type config() :: term().
 
@@ -134,6 +142,9 @@ add(Config)
 
 dump() ->
     gen_server:call(?SERVER, dump).
+
+dump_map() ->
+    gen_server:call(?SERVER, dump_map).
 
 subscribe(Args) ->
     gen_server:call(?SERVER, {subscribe, self(), Args}).
@@ -209,14 +220,27 @@ init(Options) ->
 
     lager:debug("starting hex_server nodeid=~.16B, config=~p",
 		[Nodeid, Config]),
-    self() ! reload,
-    {ok, #state{ nodeid = Nodeid,
+
+    S0 = #state{ nodeid = Nodeid,
 		 config = Config,
 		 map = Map,
 		 tab = Tab,
 		 owner_table = OwnerTab,
 		 input_rules = []
-	       }}.
+	       },
+    %% Must load rules before we are upp and running otherwise we will
+    %% miss events
+    %% self() ! reload,
+    case reload(S0#state.config, S0) of
+	{ok,S1} ->
+	    ?dbg("----------------------\n"
+		 "  HEX_SERVER RUNNING\n"
+		 "----------------------\n"),
+	    {ok, S1};
+	Error ->
+	    lager:error("failed to load configuration ~p\n", [Error]),
+	    {ok, S0}
+    end.
 
 create_map([], Acc) ->
     Acc;
@@ -416,9 +440,26 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 handle_call(dump, _From, State) ->
     io:format("State ~p", [State]),
     {reply, State, State};
+handle_call(dump_map, _From, State) ->
+    Map = State#state.map,
+    lists:foreach(
+      fun(M) ->
+	      io:format("~6.16.0B:~3w ~p\n", [M#map_item.nodeid band 16#ffffff,
+					      M#map_item.channel,
+					      M#map_item.label])
+      end, lists:sort(fun(A, B) ->
+			      An = A#map_item.nodeid band 16#ffffff,
+			      Bn = B#map_item.nodeid band 16#ffffff,
+			      if An < Bn -> true;
+				 An =:= Bn -> 
+				      A#map_item.channel < B#map_item.channel;
+				 true -> false
+			      end
+		      end, Map)),
+    {reply, Map, State};
+
 handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+    {reply, {error, bad_call}, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -888,10 +929,13 @@ add_outputs([], _Rid, _Rchan, _State) ->
     ok.
 
 
-run_output_add(Signal=#hex_signal {value = Value}, 
+run_output_add(Signal=#hex_signal {id=_LId, chan=_LChan, value = Value}, 
 	       State=#state {evt_list = EvtList}) ->
     lager:debug("run_output_add: ~p", [Signal]),
     {Id, Chan} = value2nid(Value),
+    ?dbg("~6.16.0B:~3w ~6.16.0B:~w action=~w\n",
+	 [_LId band 16#ffffff, _LChan, Id band 16#ffffff, Chan,
+	  output_add]),
     lager:debug("run_output_add: ~.16B ~p", [Id, Chan]),
     if Chan >=1, Chan =< 254 -> 
 	    run_output_add(Id, Chan, Signal, EvtList, State);
@@ -907,20 +951,28 @@ run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 		(?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
 	    if Id =:= SigNodeId,
 	       LChan =:= S#hex_signal.chan ->
-		    case is_mapped(Map, Label, RId, RChan) of
-			true -> 
+		    case find_map_item(Map, Label, RId, RChan) of
+			{true,_M} -> 
+			    ?dbg("output-add*: ~6.16.0B:~3w ~p\n", 
+				 [_M#map_item.nodeid band 16#ffffff,
+				  _M#map_item.channel,
+				  _M#map_item.label]),
 			    %% Resent output_add clears alarm
 			    NewState =
 				run_alarm(RId, RChan, 0, Map, State),
 			    run_output_add(Id, LChan, Signal, Events, NewState);
 			false ->
-			    MapItem = #map_item{label = Label,
-						nodeid = RId,
-						channel = RChan,
-						type = dynamic},
-			    lager:debug("run_output_add: item ~p", [MapItem]),
+			    M = #map_item{label = Label,
+					  nodeid = RId,
+					  channel = RChan,
+					  type = dynamic},
+			    ?dbg("output-add: ~6.16.0B:~3w ~p\n", 
+				 [M#map_item.nodeid band 16#ffffff,
+				  M#map_item.channel,
+				  M#map_item.label]),
+			    lager:debug("run_output_add: item ~p", [M]),
 			    run_output_add(Id, LChan, Signal, Events, 
-					   State#state {map = [MapItem | Map]})
+					   State#state {map = [M | Map]})
 		    end;
 	       true ->
 		    run_output_add(Id, LChan, Signal, Events, State)
@@ -952,8 +1004,8 @@ run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
 	    
 	    if Id =:= SigNodeId,
 	       LChan =:= S#hex_signal.chan ->
-		    case is_mapped(Map, Label, RId, RChan) of
-			true ->
+		    case find_map_item(Map, Label, RId, RChan) of
+			{true,_M} ->
 			    lager:debug("run_output_del: item ~p, ~p, ~p", 
 					[Label, RId, RChan]),
 			    %% output_del clears alarms
@@ -979,6 +1031,8 @@ run_output_action(Action,
 		  Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 		  State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
+    ?dbg("~6.16.0B:~3w value=~p, action=~w\n",
+	 [Id band 16#ffffff, Chan, Value, Action]),
     %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
     run_output_action(Action, Id, Chan, Value, Map, State).
 
@@ -1159,11 +1213,12 @@ value2nid(Value) ->
     Chan = (Value band 16#ff),
     {Id, Chan}.
 
-is_mapped([#map_item{label=Label,nodeid=Id,channel=Chan}|_Map],Label,Id,Chan) ->
-    true;
-is_mapped([_|Map],Label,Id,Chan) ->
-    is_mapped(Map,Label,Id,Chan);
-is_mapped([],_Label,_Id,_Chan) ->
+find_map_item([M=#map_item{label=Label,nodeid=Id,channel=Chan}|_Map],
+	      Label,Id,Chan) ->
+    {true,M};
+find_map_item([_|Map],Label,Id,Chan) ->
+    find_map_item(Map,Label,Id,Chan);
+find_map_item([],_Label,_Id,_Chan) ->
     false.
 
 %% Remove specific item
@@ -1271,7 +1326,7 @@ match_value(_, _) -> false.
 
 input(I, Value) when is_integer(I); is_atom(I) ->
     lager:debug("input ~w ~w", [I, Value]),
-    %% io:format("hex_server: INPUT ~w ~p\n", [I, Value]),
+    %% ?dbg("hex_server: INPUT ~w ~p\n", [I, Value]),
     try ets:lookup(?TABLE, {input,I}) of
 	[] ->
 	    lager:warning("hex_input ~w not running", [I]),
@@ -1287,7 +1342,6 @@ input(I, Value) when is_integer(I); is_atom(I) ->
 output(Channel,Target,Value={_Type,_,_}) when
       is_atom(Target), is_integer(Channel), Channel >= 1, Channel =< 254 ->
     lager:debug("output ~w:~s ~w", [Channel,Target,Value]),
-    %% io:format("hex_server: OUTPUT  ~w:~s ~p\n", [Channel,Target,Value]),
     try ets:lookup(?TABLE, {output,Channel}) of
 	[] ->
 	    lager:warning("output ~w not running", [Channel]),

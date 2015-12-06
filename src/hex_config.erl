@@ -324,6 +324,7 @@ validate_event_flags([]) ->
 validate_event_flag({type,button}) -> ok;
 validate_event_flag({type,switch}) -> ok;
 validate_event_flag({type,dimmer}) -> ok;
+validate_event_flag({type,interval}) -> ok;
 validate_event_flag({type,dimmer_switch}) -> ok;
 validate_event_flag({enable,true}) -> ok;
 validate_event_flag({enable,false}) -> ok;
