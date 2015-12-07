@@ -76,7 +76,6 @@
 %% -define(dbg(F,A), io:format((F),(A))).
 %% -define(dbg(F), io:format((F))).
 
-
 -type config() :: term().
 
 -record(map_item,
@@ -228,19 +227,12 @@ init(Options) ->
 		 owner_table = OwnerTab,
 		 input_rules = []
 	       },
-    %% Must load rules before we are upp and running otherwise we will
-    %% miss events
-    %% self() ! reload,
-    case reload(S0#state.config, S0) of
-	{ok,S1} ->
-	    ?dbg("----------------------\n"
-		 "  HEX_SERVER RUNNING\n"
-		 "----------------------\n"),
-	    {ok, S1};
-	Error ->
-	    lager:error("failed to load configuration ~p\n", [Error]),
-	    {ok, S0}
-    end.
+    self() ! reload,
+    ?dbg("---------------------\n"
+	 " HEX_SERVER STARTED  \n"
+	 "---------------------\n"),
+    {ok, S0}.
+
 
 create_map([], Acc) ->
     Acc;
@@ -586,6 +578,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 reload({file,File}, State) ->
+    ?dbg("---------------------\n"
+	 " HEX_SERVER RELOAD   \n"
+	 "---------------------\n"),
     case file:consult(File) of
 	{ok,Config} ->
 	    rescan(Config, File, self(), State);
@@ -602,12 +597,18 @@ add(Config, Owner, State) ->
     rescan(Config, "*add-call*", Owner, State).
 
 rescan(Config, File, Owner, State) ->
+    ?dbg("---------------------\n"
+	 " HEX_SERVER RESCAN   \n"
+	 "---------------------\n"),
     case hex_config:scan(Config) of
 	{ok,{Evt,In,Out,Trans}} ->
 	    State1 = start_outputs(Out, Owner, State),
 	    State2 = start_inputs(In, Owner, State1),
 	    State3 = start_events(Evt, Owner, State2),
 	    State4 = start_transmits(Trans, Owner, State3),
+	    ?dbg("---------------------\n"
+		 " HEX_SERVER RESCAN DONE\n"
+		 "---------------------\n"),
 	    {ok, State4#state { input_rules = In }};
 	Error={error,Reason} ->
 	    io:format("config error ~p\n", [Reason]),
@@ -1326,7 +1327,6 @@ match_value(_, _) -> false.
 
 input(I, Value) when is_integer(I); is_atom(I) ->
     lager:debug("input ~w ~w", [I, Value]),
-    %% ?dbg("hex_server: INPUT ~w ~p\n", [I, Value]),
     try ets:lookup(?TABLE, {input,I}) of
 	[] ->
 	    lager:warning("hex_input ~w not running", [I]),
