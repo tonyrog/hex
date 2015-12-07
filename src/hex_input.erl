@@ -38,6 +38,8 @@
 	 handle_event/3, handle_sync_event/4,
 	 handle_info/3, terminate/3, code_change/4]).
 
+-export([dump/1]).
+
 -define(S_NEUTRAL,    s_neutral).
 -define(S_PUSH,       s_push).
 
@@ -278,6 +280,9 @@ event_spec() ->
       ]}
     ].
 
+dump(Pid) ->
+    gen_fsm:sync_send_all_state_event(Pid, dump).
+
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -387,6 +392,7 @@ analog_input(IValue, Src, State, S) ->
     Opt = S#s.config,
     Value = trunc(IValue*Opt#opt.analog_scale + Opt#opt.analog_offs),
     lager:debug("analog_input ~w: value=~w", [S#s.id,Value]),
+    lager:debug("context ~w: state=~w", [S,State]),
     %% transform value
     if Opt#opt.analog_to_digital ->
 	    if Value >= Opt#opt.analog_max ->
@@ -489,6 +495,9 @@ handle_event(_Event, StateName, State) ->
 %%                   {stop, Reason, Reply, NewState}
 %% @end
 %%--------------------------------------------------------------------
+handle_sync_event(dump, _From, StateName, State) ->
+    {reply, {ok, State}, StateName, State};
+
 handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
     {reply, Reply, StateName, State}.
@@ -539,7 +548,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-
+ 
 output(digital,0,_Src,State,S) when (S#s.config)#opt.on_only ->
     {next_state, State, S#s { value = 0 }};  %% ignore value? test
 output(digital,V,_Src,State,S) when V =/= 0, (S#s.config)#opt.off_only ->
@@ -554,6 +563,7 @@ output(encoder,Value,Src,State,S) ->
     {next_state, State, S#s { src=Src }};
 
 output(analog,Value,Src,State,S) ->
+    lager:debug("~w: value=~w", [S,Value]),
     Opt = S#s.config,
     Now = timestamp_us(), %% fixme: read this somewhere (pass in signal?)
     Delta = Value - S#s.an_value,
@@ -621,6 +631,7 @@ output(Type,Value,Src,State,S) ->
     {next_state, State, S#s { value = Value, src=Src }}.
 
 send_output(Type,Value,Src,S) ->
+   lager:debug("~w: type ~w: value=~w", [S#s.id,Type,Value]),
     Output = { Type, Value, Src },
     lists:foreach(fun({Target,Channel}) ->
 			  hex_server:output(Channel,Target,Output)

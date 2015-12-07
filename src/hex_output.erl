@@ -46,6 +46,7 @@
 	 state_rampdown/2,
 	 state_deact/2]).
 
+-export([dump/1]).
 
 -define(SERVER, ?MODULE).
 
@@ -284,6 +285,9 @@ event_spec() ->
        {leaf, expr, [{type,string,[]}]}
       ]}
     ].
+
+dump(Pid) ->
+    gen_fsm:sync_send_all_state_event(Pid, dump).
 
 
 %%--------------------------------------------------------------------
@@ -874,6 +878,9 @@ handle_sync_event({setopts,Opts}, _From, StateName, State) ->
 	    {reply, Error, StateName, State}
     end;
 
+
+handle_sync_event(dump, _From, StateName, State) ->
+    {reply, {ok, State}, StateName, State};
 
 handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
