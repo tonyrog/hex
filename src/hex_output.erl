@@ -495,6 +495,10 @@ state_on(Event={Name,{_Type,Value,_Src}}, State) when
     case do_input(Event, State) of
 	{?INPUT_DISABLE, State1} ->
 	    do_deactivate(init, State1);
+	{?INPUT_NONE,State1} ->
+	    lager:debug("action in state_on event\n"),
+	    State2 = action(State1),
+	    {next_state, state_on, State2};
 	{_, State1} ->
 	    {next_state, state_on, State1}
     end;
@@ -1134,6 +1138,8 @@ do_target(_Type, Name, _Vo, Value, Src, State) ->
 	    1 ->
 		1-min(?CORE_VALUE(State,Core2,disable),1)
 	end,
+    lager:debug("do_target: ~w, active=~w, enabled'=~w, enabled=~w, inhibit=~w", 
+		[Name,Active,PrevEnabled,Enabled,State#state.inhibited]),
     %% FIXME: configure a flexible environment ????
     State1 = State#state { enable_value = Enabled,
 			   active_value = Active,
