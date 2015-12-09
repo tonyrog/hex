@@ -31,6 +31,7 @@
 -export([reload/0, 
 	 load/1,
 	 add/1,
+	 remove/0,
 	 dump/0,
 	 dump_map/0]).
 -export([subscribe/1,
@@ -138,6 +139,9 @@ load(File)
 add(Config)  
   when is_list(Config) ->
     gen_server:call(?SERVER, {add, Config, self()}).
+
+remove()  ->
+    gen_server:call(?SERVER, {remove, self()}).
 
 dump() ->
     gen_server:call(?SERVER, dump).
@@ -292,8 +296,20 @@ handle_call({add, Config, Owner} = M, _From, State=#state {owners = Owners}) ->
 	Error ->
 	    {reply, Error, State}
     end;
-handle_call({join,Pid,AppName}, _From, State) when is_pid(Pid),
-						       is_atom(AppName) ->
+handle_call({remove, Pid} = M, _From, State=#state {owners = Owners}) ->
+    lager:debug("message ~p", [M]),
+    case lists:keytake(Pid, 1, Owners) of
+	false ->
+	    lager:debug("unknown owner ~p",[Pid]),
+	    {reply, ok, State};
+	{value, {Pid, Mon}, NewOwners} ->
+	    erlang:demonitor(Mon, [flush]),
+	    State1 = remove(Pid, State),
+	    ets:delete(State1#state.owner_table, Pid),
+	    {reply, ok, State1#state {owners = NewOwners}}
+	end;
+handle_call({join,Pid,AppName}, _From, State) 
+  when is_pid(Pid), is_atom(AppName) ->
     lager:info("plugin ~s [~w] joined", [AppName,Pid]),
     AppMon = erlang:monitor(process,Pid),
     %% schedule load of event defintions for App in a while
@@ -532,7 +548,7 @@ handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
 			    State1 = remove(Pid, State),
 			    ets:delete(State1#state.owner_table, Pid),
 			    {noreply, State1#state {owners = NewOwners}}
-		    end;
+			end;
 		{value, #subscriber {pid = Pid}, NewSubs} ->
 		    lager:warning("subscriber DOWN: ~p reason=~p", 
 				  [Pid,_Reason]),
@@ -768,6 +784,7 @@ remove(Owner, State=#state {owner_table = OwnerTab}) ->
     remove_all(ets:lookup(OwnerTab, Owner), State).
     
 remove_all([], State) ->
+    lager:debug("all removed", []),
     State;
 remove_all([{_Owner, {transmit, L}} | Rest], State) ->
     NewState = remove_transmit(L, State),
