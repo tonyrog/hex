@@ -153,7 +153,7 @@ unsubscribe() ->
 
 inform(Type, Options)   
   when is_atom(Type), is_list(Options)->
-    ?SERVER ! {inform, Type, Options}.
+    ?SERVER ! {inform, Type, Options, self()}.
 
 event_list() ->
     gen_server:call(?SERVER, event_list).
@@ -330,7 +330,7 @@ handle_call({unsubscribe, Pid} = M, _From, State=#state {subs = Subs}) ->
     end;
 handle_call({inform, Type, Options} = M, _From, 
 	    State=#state {subs = Subs}) ->
-    lager:debug("message ~p", [M]),
+    lager:debug("message ~p from ~p", [M, _From]),
     Event = [{'event-type',Type}] ++ Options,
     inform_subscribers(Event, Subs),
     {reply, ok, State};
@@ -511,9 +511,9 @@ handle_info({init_plugin, AppName}, State) ->
     %% reload all events for Plugin AppName
     {noreply, State};
 
-handle_info({inform, Type, Options}, 
+handle_info({inform, Type, Options, _From}, 
 	    State=#state {subs = Subs}) ->
-    lager:debug("inform: ~p ~p", [Type, Options]),
+    lager:debug("inform: ~p ~p from ~p", [Type, Options, _From]),
     Event = [{'event-type',Type}] ++ Options,
     inform_subscribers(Event, Subs),
     {noreply, State};
