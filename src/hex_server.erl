@@ -906,9 +906,8 @@ active([_Flag | Flags]) -> active(Flags).
 
 run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
     lager:debug("run_power_on: ~p", [Signal]),
-    NewMap = remove_mapped(RId, Map, []),
-    lager:debug("old map ~p, new map ~p", [Map, NewMap]),
-    add_outputs(Signal, Rules, State#state{map = NewMap}).
+    NewState = reset(RId, Map, State, []),
+    add_outputs(Signal, Rules, NewState).
 
 add_outputs(Signal, [Rule|Rules], State) ->
     RulePattern = Rule#hex_input.signal,
@@ -1145,14 +1144,20 @@ event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
     event_alarm(Label, Alarm, Events, [E | Acc], Subs).
 
 
-alarm_confirm(Label, #hex_signal{id = Id, chan = Chan}, State) ->
-    Confirm = #hex_signal {id=Id,
-			   chan=Chan,
-			   type=?HEX_ALARM_CNFRM,
-			   value=0,
-			   source={event,Label}},
-    run_transmit(Confirm, State#state.transmit_rules).
-
+alarm_confirm(Label, #hex_signal{id = Id, chan = Chan}, 
+	      State=#state {map = Map}) ->
+    case lists:keyfind(Label, #map_item.label, Map) of
+	#map_item{nodeid = XNodeId, channel = Channel} ->
+	    NodeId = XNodeId band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+	    Confirm = #hex_signal {id = Id,
+				   chan = Chan,
+				   type = ?HEX_ALARM_CNFRM,
+				   value = (NodeId bsl 8) bor Channel,
+				   source = {event,Label}},
+	    run_transmit(Confirm, State#state.transmit_rules);
+	false ->
+	    lager:warning("alarm confirm for unmapped item ~p",[Label])
+    end.
 
 run_alarm_confirm_ack(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
@@ -1250,12 +1255,41 @@ remove_mapped(Label,Id,Chan,[MapItem|Map],Acc) ->
     remove_mapped(Label,Id,Chan,Map,[MapItem|Acc]).
 
 %% Remove all items on node Id.
-remove_mapped(_Id,[],Acc) ->
-    Acc;
-remove_mapped(Id, [#map_item{nodeid=Id}|Map],Acc) ->
-    remove_mapped(Id,Map,Acc);
-remove_mapped(Id,[MapItem|Map],Acc) ->
-    remove_mapped(Id,Map,[MapItem|Acc]).
+reset(_Id,[],State, NewMap) ->
+    State#state{map = NewMap};
+reset(Id, [#map_item{nodeid = Id, label = Label} | Map], 
+      State=#state{evt_list = Events, subs = Subs}, Acc) ->
+    NewEvents = 
+	case lists:keytake(Label, #int_event.label, Events) of
+	    {value, E=#int_event{}, Rest} ->
+		clear_alarm(E, Subs),
+		deactivate(E, Subs),
+		[E#int_event{alarm = 0, 
+			     analog_value = 0, 
+			     state = 0, 
+			     active = false} | Rest];
+	    false ->
+		lager:warning("Event ~p not found",[Label])
+	end,
+    reset(Id, Map, State#state{evt_list = NewEvents}, Acc);
+reset(Id, [MapItem|Map], State, Acc) ->
+    reset(Id, Map, State, [MapItem|Acc]).
+
+clear_alarm(#int_event{alarm = 0}, _Subs) ->
+    ok;
+clear_alarm(#int_event{label = Label}, Subs) ->
+    Event = [{'event-type','alarm'},{label, Label}, {value, 0}],
+    inform_subscribers(Event, Subs).
+
+deactivate(#int_event{active = 0}, _Subs) ->
+    ok;
+deactivate(#int_event{analog_value = AV, label = Label}, Subs) 
+  when AV =/= 0->
+    Event = [{'event-type','output-state'}, {label, Label}, {value, 0}],
+    inform_subscribers(Event, Subs);
+deactivate(#int_event{label = Label}, Subs) ->
+    Event = [{'event-type','output-active'}, {label, Label}, {value, 0}],
+    inform_subscribers(Event, Subs).
 
 %% handle "distribution" messages when match
 run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
