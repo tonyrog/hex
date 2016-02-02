@@ -41,6 +41,7 @@
 -define(HEX_ALARM_CNFRM,    16#280E).   %% Confirm larm condition (from client)
 
 -define(HEX_OUTPUT_STATE,   16#2814).   %% output-active/output-value
+-define(HEX_OUTPUT_ALARM,   16#2815).   %% send output-alarm on match
 
 -define(HEX_COBID_EXT,      16#20000000).
 -define(HEX_XNODE_ID_MASK,  16#01FFFFFF).  %% 25 bit node id

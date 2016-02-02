@@ -875,6 +875,7 @@ run_event(Signal, Data, Rules, State)
 	%% ?HEX_WAKEUP    -> run_wakeup(Signal, Rules, State);
 	?HEX_ALARM        -> run_alarm(Signal, State);
 	?HEX_ALARM_CNFRM_ACK -> run_alarm_confirm_ack(Signal, State);
+	?HEX_OUTPUT_ALARM  -> run_output_alarm(Signal, State);
 	_ -> State
     end.
 
@@ -1182,12 +1183,44 @@ event_alarm_confirm_ack(Label, Alarm,
 	     Events], 
 	    Acc, Subs) ->
     App:output(AppFlags, [{alarm_ack, 0}]),
-    Event = [{'event-type', alarm_ack}, {label, Label}],
+    Event = [{'event-type', 'alarm-ack'}, {label, Label}],
     inform_subscribers(Event, Subs),
     event_alarm_confirm_ack(Label, Alarm, Events, 
 		[E#int_event {alarm = -1} | Acc], Subs);
 event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->
     event_alarm_confirm_ack(Label, Alarm, Events, [E | Acc], Subs).
+
+run_output_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
+	       State=#state {map = Map}) ->
+    lager:debug("signal ~p", [Signal]),
+    run_output_alarm(Id, Chan, Value, Map, State).
+
+run_output_alarm(Id, Chan, AlarmState, 
+	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
+	       State=#state{evt_list = EList, subs = Subs}) ->
+    lager:debug("event ~p, alarm state ~p", [Label, AlarmState]),
+    NewElist = event_output_alarm(Label, AlarmState, EList, [], Subs),
+    run_output_alarm(Id, Chan, AlarmState, Map, 
+		    State#state{evt_list = NewElist});
+run_output_alarm(Id, Chan, AlarmState, [_MapItem | Map], State) ->
+    run_output_alarm(Id, Chan, AlarmState, Map, State);
+run_output_alarm(_Id, _Chan, _AlarmState, [], State) ->
+    State.
+
+event_output_alarm(_Label, _AlarmState, [], Acc, _Subs) ->
+    Acc;
+event_output_alarm(Label, AlarmState, 
+	    [E=#int_event {label = Label, app = App, app_flags = AppFlags} | 
+	     Events], 
+	    Acc, Subs) ->
+    App:output(AppFlags, [{output_alarm, AlarmState}]),
+    Event = [{'event-type', 'alarm-state'}, {label, Label}, 
+	     {value, AlarmState}],
+    inform_subscribers(Event, Subs),
+    event_output_alarm(Label, AlarmState, Events, 
+		[E#int_event {alarm = AlarmState} | Acc], Subs);
+event_output_alarm(Label, AlarmState, [E | Events], Acc, Subs) ->
+    event_output_alarm(Label, AlarmState, Events, [E | Acc], Subs).
 
 inform_subscribers(_Msg, []) ->
     ok;
