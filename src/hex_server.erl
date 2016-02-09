@@ -1314,7 +1314,7 @@ clear_alarm(#int_event{label = Label}, Subs) ->
     Event = [{'event-type','alarm'},{label, Label}, {value, 0}],
     inform_subscribers(Event, Subs).
 
-deactivate(#int_event{active = 0}, _Subs) ->
+deactivate(#int_event{active = false}, _Subs) ->
     ok;
 deactivate(#int_event{analog_value = AV, label = Label}, Subs) 
   when AV =/= 0->
