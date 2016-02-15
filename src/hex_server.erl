@@ -28,22 +28,30 @@
 
 %% API
 -export([start_link/1]).
+
+%% configuration
 -export([reload/0, 
 	 load/1,
 	 add/1,
-	 remove/0,
-	 dump/0,
-	 dump_map/0]).
+	 remove/0]).
 -export([subscribe/1,
 	 unsubscribe/0]).
 -export([inform/2]).
--export([event_list/0]).
--export([event_signal/1]).
--export([output2pid/1]).
--export([input2pid/1]).
--export([input_active/2]).
--export([input2outputs/1]).
--export([input2output_pids/1]).
+
+% action
+-export([output/3, 
+	 input/2, 
+	 event/2, 
+	 event_and_transmit/2, 
+	 analog_event_and_transmit/2, 
+	 transmit/2,
+	 alarm_ack/1]).
+
+-export([match_value/2, 
+	 match_pattern/2,
+	 match_pattern/3,
+	 match_bin_pattern/3
+	]).
 
 %% gen_server callbacks
 -export([init/1, 
@@ -53,17 +61,17 @@
 	 terminate/2, 
 	 code_change/3]).
 
--export([output/3, 
-	 input/2, 
-	 event/2, 
-	 event_and_transmit/2, 
-	 analog_event_and_transmit/2, 
-	 transmit/2]).
--export([match_value/2, 
-	 match_pattern/2,
-	 match_pattern/3,
-	 match_bin_pattern/3
-	]).
+
+%% test
+-export([event_list/0]).
+-export([event_signal/1]).
+-export([output2pid/1]).
+-export([input2pid/1]).
+-export([input_active/2]).
+-export([input2outputs/1]).
+-export([input2output_pids/1]).
+-export([dump/0,
+	 dump_map/0]).
 
 -include("../include/hex.hrl").
 
@@ -125,6 +133,16 @@
 	  owners = []      :: [{Pid::pid(), Mon::reference()}]
 	 }).
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the server
+%%
+%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
+%% @end
+%%--------------------------------------------------------------------
+start_link(Options) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, Options, []).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -143,12 +161,6 @@ add(Config)
 remove()  ->
     gen_server:call(?SERVER, {remove, self()}).
 
-dump() ->
-    gen_server:call(?SERVER, dump).
-
-dump_map() ->
-    gen_server:call(?SERVER, dump_map).
-
 subscribe(Args) ->
     gen_server:call(?SERVER, {subscribe, self(), Args}).
 
@@ -165,6 +177,15 @@ event_list() ->
 event_signal(Label) ->
     gen_server:call(?SERVER, {event_signal, Label}).
     
+event_and_transmit(Label, Value) ->
+    gen_server:call(?SERVER, {event_and_transmit, Label, Value}).
+
+analog_event_and_transmit(Label, Value) ->
+    gen_server:call(?SERVER, {analog_event_and_transmit, Label, Value}).
+
+alarm_ack(Label) ->
+    gen_server:call(?SERVER, {alarm_ack, Label}).
+    
 input_active(Label, Active) ->
     gen_server:call(?SERVER, {input_active, Label, Active}).
     
@@ -180,15 +201,12 @@ input2outputs(Label) ->
 input2output_pids(Label) ->
     gen_server:call(?SERVER, {input2output_pids, Label}).
 
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
-start_link(Options) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, Options, []).
+dump() ->
+    gen_server:call(?SERVER, dump).
+
+dump_map() ->
+    gen_server:call(?SERVER, dump_map).
+
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -441,6 +459,20 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 	    run_transmit(Signal1, State#state.transmit_rules),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
+	{false, _} ->
+	    lager:debug("Unknown event ~p", [Label]),
+	    {reply, {error, unknown_event}, State}
+    end;
+handle_call({alarm_ack, Label}, _From, 
+	    State=#state {evt_list = EList}) ->
+    lager:debug("alarm_ack: ~p\n", [Label]),
+    case lists:keyfind(Label, #int_event.label, EList) of
+	#int_event {signal = Signal, alarm = Alarm} ->
+	    if Alarm =:= 0 -> lager:warning("no alarm for ~p", [Label]);
+	       true -> ok
+	    end,
+	    alarm_confirm(Label, Signal, State),
+	    {reply, ok, State};
 	{false, _} ->
 	    lager:debug("Unknown event ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
@@ -1472,12 +1504,6 @@ event(S0=#hex_signal{}, Env) ->
 		    },
     Data = proplists:get_value(data, Env, <<>>),
     gen_server:cast(?SERVER, {event, S, Data}).
-
-event_and_transmit(Label, Value) ->
-    gen_server:call(?SERVER, {event_and_transmit, Label, Value}).
-
-analog_event_and_transmit(Label, Value) ->
-    gen_server:call(?SERVER, {analog_event_and_transmit, Label, Value}).
 
 event_value(Var, Env) when is_atom(Var) ->
     proplists:get_value(Var, Env, 0);
