@@ -39,7 +39,7 @@
 -export([event/1, event/2]).
 -export([event_and_transmit/2]).
 -export([analog_event_and_transmit/2]).
--export([alarm_ack/1]).
+-export([alarm_confirm/1]).
 -export([event_list/0]).
 -export([event_signal/1]).
 -export([signal/5]).
@@ -171,8 +171,8 @@ analog_event_and_transmit(Label, Value) ->
     hex_server:analog_event_and_transmit(Label, Value).
 
 %% Send an alarm ack that will also be transmitted to the can bus
-alarm_ack(Label) ->
-    hex_server:alarm_ack(Label).
+alarm_confirm(Label) ->
+    hex_server:alarm_confirm(Label).
 
 
 %%
