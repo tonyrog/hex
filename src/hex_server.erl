@@ -45,7 +45,7 @@
 	 event_and_transmit/2, 
 	 analog_event_and_transmit/2, 
 	 transmit/2,
-	 alarm_ack/1]).
+	 alarm_confirm/1]).
 
 -export([match_value/2, 
 	 match_pattern/2,
@@ -72,6 +72,7 @@
 -export([input2output_pids/1]).
 -export([dump/0,
 	 dump_map/0]).
+-export([clean/1]).
 
 -include("../include/hex.hrl").
 
@@ -183,8 +184,8 @@ event_and_transmit(Label, Value) ->
 analog_event_and_transmit(Label, Value) ->
     gen_server:call(?SERVER, {analog_event_and_transmit, Label, Value}).
 
-alarm_ack(Label) ->
-    gen_server:call(?SERVER, {alarm_ack, Label}).
+alarm_confirm(Label) ->
+    gen_server:call(?SERVER, {alarm_confirm, Label}).
     
 input_active(Label, Active) ->
     gen_server:call(?SERVER, {input_active, Label, Active}).
@@ -440,7 +441,7 @@ handle_call({event_and_transmit, Label, Value}, _From,
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{false, _} ->
-	    lager:debug("Unknown event ~p", [Label]),
+	    lager:debug("Unknown label ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
     end;
 handle_call({analog_event_and_transmit, Label, Value}, _From, 
@@ -460,12 +461,12 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{false, _} ->
-	    lager:debug("Unknown event ~p", [Label]),
+	    lager:debug("Unknown label ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
     end;
-handle_call({alarm_ack, Label}, _From, 
+handle_call({alarm_confirm, Label}, _From, 
 	    State=#state {evt_list = EList}) ->
-    lager:debug("alarm_ack: ~p\n", [Label]),
+    lager:debug("alarm_confirm: ~p\n", [Label]),
     case lists:keyfind(Label, #int_event.label, EList) of
 	#int_event {signal = Signal, alarm = Alarm} ->
 	    if Alarm =:= 0 -> lager:warning("no alarm for ~p", [Label]);
@@ -473,8 +474,8 @@ handle_call({alarm_ack, Label}, _From,
 	    end,
 	    alarm_confirm(Label, Signal, State),
 	    {reply, ok, State};
-	{false, _} ->
-	    lager:debug("Unknown event ~p", [Label]),
+	false ->
+	    lager:debug("Unknown label ~p", [Label]),
 	    {reply, {error, unknown_event}, State}
     end;
 handle_call(dump, _From, State) ->
@@ -939,9 +940,17 @@ active([_Flag | Flags]) -> active(Flags).
 
 run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
     lager:debug("run_power_on: ~p", [Signal]),
-    NewState = reset(RId, Map, State, []),
-    add_outputs(Signal, Rules, NewState).
+    State1 = reset(RId, Map, State, []),
+    State2 = add_node(Signal, State1),     
+    add_outputs(Signal, Rules, State2).
 
+add_node(Signal=#hex_signal {id = RId}, State=#state{evt_list = Events}) ->
+    lager:debug("add_node: ~.16B ", [RId]),
+    %% Node has channel 0
+    run_output_add(clean(hex:make_self(State#state.nodeid)), 0, 
+		   Signal#hex_signal {chan = 0}, Events, State).
+		
+	    
 add_outputs(Signal, [Rule|Rules], State) ->
     RulePattern = Rule#hex_input.signal,
     if is_integer(Signal#hex_signal.id),
@@ -980,12 +989,12 @@ add_outputs([], _Rid, _Rchan, _State) ->
     ok.
 
 
-run_output_add(Signal=#hex_signal {id=_LId, chan=_LChan, value = Value}, 
+run_output_add(Signal=#hex_signal {id=_RId, chan=_RChan, value = Value}, 
 	       State=#state {evt_list = EvtList}) ->
-    lager:debug("run_output_add: ~p", [Signal]),
+    %% lager:debug("run_output_add: ~p", [Signal]),
     {Id, Chan} = value2nid(Value),
     ?dbg("~6.16.0B:~3w ~6.16.0B:~w action=~w\n",
-	 [_LId band 16#ffffff, _LChan, Id band 16#ffffff, Chan,
+	 [_RId band 16#ffffff, _RChan, Id band 16#ffffff, Chan,
 	  output_add]),
     lager:debug("run_output_add: ~.16B ~p", [Id, Chan]),
     if Chan >=1, Chan =< 254 -> 
@@ -995,44 +1004,41 @@ run_output_add(Signal=#hex_signal {id=_LId, chan=_LChan, value = Value},
     end.
 
 run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan}, 
-	       [#int_event {label = Label, signal = S} | Events], 
-	       State=#state{map = Map}) ->
-    if is_integer(S#hex_signal.id) ->
-	    SigNodeId = S#hex_signal.id band 
-		(?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
-	    if Id =:= SigNodeId,
-	       LChan =:= S#hex_signal.chan ->
-		    case find_map_item(Map, Label, RId, RChan) of
-			{true,_M} -> 
-			    ?dbg("output-add*: ~6.16.0B:~3w ~p\n", 
-				 [_M#map_item.nodeid band 16#ffffff,
-				  _M#map_item.channel,
-				  _M#map_item.label]),
-			    %% Resent output_add clears alarm
-			    NewState =
-				run_alarm(RId, RChan, 0, Map, State),
-			    run_output_add(Id, LChan, Signal, Events, NewState);
-			false ->
-			    M = #map_item{label = Label,
-					  nodeid = RId,
-					  channel = RChan,
-					  type = dynamic},
-			    ?dbg("output-add: ~6.16.0B:~3w ~p\n", 
-				 [M#map_item.nodeid band 16#ffffff,
-				  M#map_item.channel,
-				  M#map_item.label]),
-			    lager:debug("run_output_add: item ~p", [M]),
-			    run_output_add(Id, LChan, Signal, Events, 
-					   State#state {map = [M | Map]})
-		    end;
-	       true ->
-		    run_output_add(Id, LChan, Signal, Events, State)
-	    end;
+	       [#int_event {label = Label, signal = S} | Events], State) 
+  when is_integer(S#hex_signal.id) ->
+    SigNodeId = clean(S#hex_signal.id),
+    if Id =:= SigNodeId,
+       LChan =:= S#hex_signal.chan ->
+	    NewState = run_output_add(RId, RChan, Label, State),
+	    run_output_add(Id, LChan, Signal, Events, NewState);
        true ->
 	    run_output_add(Id, LChan, Signal, Events, State)
     end;
+run_output_add(Id, LChan, Signal, [_E | Events], State) ->
+    run_output_add(Id, LChan, Signal, Events, State);
 run_output_add(_Id, _LChan, _Signal, [], State) ->
     State.
+
+run_output_add(RId, RChan, Label, State=#state{map = Map}) ->
+    case find_map_item(Map, Label, RId, RChan) of
+	{true,_M} -> 
+	    lager:debug("output-add, already mapped: ~6.16.0B:~3w ~p\n", 
+		 [_M#map_item.nodeid band 16#ffffff,
+		  _M#map_item.channel,
+		  _M#map_item.label]),
+	    %% Resent output_add clears alarm
+	    run_alarm(RId, RChan, 0, Map, State);
+	false ->
+	    M = #map_item{label = Label,
+			  nodeid = RId,
+			  channel = RChan,
+			  type = dynamic},
+	    lager:debug("run_output_add: item ~6.16.0B:~3w ~p", 
+			[M#map_item.nodeid band 16#ffffff,
+			 M#map_item.channel,
+			 M#map_item.label]),
+	    State#state {map = [M | Map]}
+    end.
 
 
 run_output_del(Signal=#hex_signal {value = Value}, 
@@ -1047,36 +1053,33 @@ run_output_del(Signal=#hex_signal {value = Value},
     end.
 
 run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan}, 
-	       [#int_event {label = Label, signal = S} | Events], 
-	       State=#state{map = Map}) ->
-    if is_integer(S#hex_signal.id) ->
-	    SigNodeId = S#hex_signal.id band 
-		(?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
-	    
-	    if Id =:= SigNodeId,
-	       LChan =:= S#hex_signal.chan ->
-		    case find_map_item(Map, Label, RId, RChan) of
-			{true,_M} ->
-			    lager:debug("run_output_del: item ~p, ~p, ~p", 
-					[Label, RId, RChan]),
-			    %% output_del clears alarms
-			    NewState =
-				run_alarm(RId, RChan, 0, Map, State),
-			    NewMap = remove_mapped(Label, RId, RChan,
-						   NewState#state.map, []),
-			    run_output_del(Id, LChan, Signal, Events, 
-					   NewState#state {map = NewMap});
-			false ->
-			    run_output_del(Id, LChan, Signal, Events, State)
-		    end;
-	       true ->
-		    run_output_del(Id, LChan, Signal, Events, State)
-	    end;
+	       [#int_event {label = Label, signal = S} | Events], State) 
+  when is_integer(S#hex_signal.id) ->
+    SigNodeId = clean(S#hex_signal.id) ,
+    if Id =:= SigNodeId,
+       LChan =:= S#hex_signal.chan ->
+	    NewState = run_output_del(RId, RChan, Label, State), 
+	    run_output_del(Id, LChan, Signal, Events, NewState);
        true ->
 	    run_output_del(Id, LChan, Signal, Events, State)
     end;
+run_output_del(Id, LChan, Signal,  [_E | Events], State) ->
+    run_output_del(Id, LChan, Signal, Events, State);
 run_output_del(_Id, _LChan, _Signal, [], State) ->
     State.
+
+run_output_del(RId, RChan, Label, State=#state{map = Map}) ->
+    case find_map_item(Map, Label, RId, RChan) of
+	{true,_M} ->
+	    lager:debug("run_output_del: item ~p, ~p, ~p", 
+			[Label, RId, RChan]),
+	    %% output_del clears alarms
+	    NewState = run_alarm(RId, RChan, 0, Map, State),
+	    NewMap = remove_mapped(Label, RId, RChan, NewState, []),
+	    NewState#state {map = NewMap};
+	false ->
+	    State
+    end.
 
 run_output_action(Action, 
 		  Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
@@ -1084,7 +1087,7 @@ run_output_action(Action,
     lager:debug("signal ~p", [Signal]),
     ?dbg("~6.16.0B:~3w value=~p, action=~w\n",
 	 [Id band 16#ffffff, Chan, Value, Action]),
-    %%Id = Id0 band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+    %%Id = clean(Id0),
     run_output_action(Action, Id, Chan, Value, Map, State).
 
 run_output_action(_Action, _Id, _Chan, _Value, [], State) ->
@@ -1181,7 +1184,7 @@ alarm_confirm(Label, #hex_signal{id = Id, chan = Chan},
 	      State=#state {map = Map}) ->
     case lists:keyfind(Label, #map_item.label, Map) of
 	#map_item{nodeid = XNodeId, channel = Channel} ->
-	    NodeId = XNodeId band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT),
+	    NodeId = clean(XNodeId),
 	    Confirm = #hex_signal {id = Id,
 				   chan = Chan,
 				   type = ?HEX_ALARM_CNFRM,
@@ -1302,6 +1305,9 @@ value2nid(Value) ->
     Chan = (Value band 16#ff),
     {Id, Chan}.
 
+clean(NodeId) ->
+    NodeId band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT).
+ 
 find_map_item([M=#map_item{label=Label,nodeid=Id,channel=Chan}|_Map],
 	      Label,Id,Chan) ->
     {true,M};
