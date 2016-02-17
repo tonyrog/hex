@@ -1076,7 +1076,7 @@ run_output_del(RId, RChan, Label, State=#state{map = Map}) ->
 			[Label, RId, RChan]),
 	    %% output_del clears alarms
 	    NewState = run_alarm(RId, RChan, 0, Map, State),
-	    NewMap = remove_mapped(Label, RId, RChan, NewState, []),
+	    NewMap = remove_mapped(Label, RId, RChan, Map, []),
 	    NewState#state {map = NewMap};
 	false ->
 	    State
