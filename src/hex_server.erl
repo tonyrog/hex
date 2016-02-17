@@ -307,10 +307,11 @@ handle_call({add, Config, Owner} = M, _From, State=#state {owners = Owners}) ->
 	{ok, State1} ->
 	    case lists:keyfind(Owner, 1, Owners) of
 		{Owner, _Mon}->
-		    {reply, ok, State1};
+		    {reply, {ok, self()}, State1};
 		false ->
 		    Mon = erlang:monitor(process, Owner),
-	    	    {reply, ok, State1#state {owners = [{Owner, Mon} | Owners]}}
+	    	    {reply, {ok, self()}, 
+		     State1#state {owners = [{Owner, Mon} | Owners]}}
 	    end;
 	Error ->
 	    {reply, Error, State}
