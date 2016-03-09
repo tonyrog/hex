@@ -180,31 +180,24 @@ add_transmit(T, Label, App, Flags, Sig, Err) ->
     end.
 %%
 %% external labels:
-%% 1: "a.b.5.x"     -> [a,b,5,x]
+%% 1: "a.b[5].x"     -> [a,b,5,x]
 %% 2: xyz           -> xyz
 %% 3: 17            -> 17
-%% 4: <<"a.b.5.x">> -> [a,b,5,x]
+%% 4: <<"a.b[5].x">> -> [a,b,5,x]
 %%
-internal_label(String,Err) when is_list(String) ->
-    ILabel = [ try list_to_integer(X) of
-		   Y -> Y
-	       catch
-		   error:_ -> list_to_atom(X)
-	       end || X <- string:tokens(String, ".")],
-    {ILabel,Err};
-internal_label(Binary,Err) when is_binary(Binary) ->
-    ILabel = [ try binary_to_integer(X) of
-		   Y -> Y
-	       catch
-		   error:_ -> binary_to_atom(X,latin1)
-	       end || X <- binary:split(Binary, <<".">>, [global])],
-    {ILabel,Err};
+internal_label(String,Err) when is_list(String); is_binary(String) ->
+    try tree_db:internal_key(String) of
+	ILabel -> {ILabel, Err}
+    catch
+	error:Reason -> 
+	    {String, [{error,String,Reason}|Err]}
+    end;
 internal_label(X,Err) when is_integer(X) ->
     {X, Err};
 internal_label(X,Err) when is_atom(X) ->
     {X, Err};
 internal_label(X,Err) ->
-    [{bad_name,X} | Err].
+    {X, [{bad_name,X} | Err]}.
 
 is_output([{Name,I}|Out]) when is_atom(Name), is_integer(I), I > 0, I < 255 ->
     is_output(Out);
