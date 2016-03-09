@@ -79,7 +79,7 @@
 	  analog_delta = 0 :: uint32(),
 	  analog_negative_delta = 1 :: uint32(),
 	  analog_positive_delta = 1 :: uint32(),
-	  analog_max_frequency = 0  :: float(),
+	  analog_max_frequency = 0.0   :: float(),
 	  inhibit_us = 0 :: uint32(),  %% derived from max_frequency
 	  analog_upper_limit = 16#ffff :: int32(),
 	  analog_lower_limit = 16#0000 :: int32(),

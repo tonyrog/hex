@@ -88,7 +88,7 @@
 	  chan    = 0 :: uint8(),          %% output number 1..254
 	  ramp_step = 20 :: uint32(),       %% min time quanta in during ramp
 
-	  counter = 0 :: uint32(),         %% repeat counter
+	  counter = 0 :: uint32() | -1,         %% repeat counter
 	  tref    = undefined :: undefined | reference(),
 	  tramp   = undefined :: undefined | reference(),
 
@@ -1001,7 +1001,7 @@ set_options([Opt|Opts], State) ->
 			    {error, {badarg,Name}}
 		    end;
 	       is_atom(Name), Expr =:= undefined ->
-		    {Vi,Core1}=hex_core:set_value(Name,{const,0},
+		    {Vi,Core1}=hex_core:set_value(Name,0,
 						  State#state.core),
 		    Targets = dict:store(Name,Vi,State#state.targets),
 		    set_options(Opts, State#state { core = Core1,

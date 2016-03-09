@@ -39,6 +39,7 @@
 -export([event/1, event/2]).
 -export([event_and_transmit/2]).
 -export([analog_event_and_transmit/2]).
+-export([alarm_confirm/1]).
 -export([event_list/0]).
 -export([event_signal/1]).
 -export([signal/5]).
@@ -93,7 +94,7 @@ each_application_([], Started) ->
 %%
 auto_join(Name) when is_atom(Name) ->
     case application:get_all_env(hex) of
-	undefined ->  %% application is not loaded nor started
+	[] ->  %% application is not loaded nor started
 	    false;
 	Env when is_list(Env) ->  %% hex is at least loaded
 	    AutoJoin = case application:get_env(hex, auto_join) of
@@ -168,6 +169,10 @@ event_and_transmit(Label, Value) ->
 %% Send an analog event that will also be transmitted to the can bus
 analog_event_and_transmit(Label, Value) ->
     hex_server:analog_event_and_transmit(Label, Value).
+
+%% Send an alarm ack that will also be transmitted to the can bus
+alarm_confirm(Label) ->
+    hex_server:alarm_confirm(Label).
 
 
 %%
@@ -423,7 +428,6 @@ validate_leaf(Key, Value, Stmts) ->
 	{type, Type, Tas} ->
 	    case validate_value(Value, Type, Tas) of
 		ok -> ok;
-		{error,Error} -> {error,{Key,Error}};
 		Error -> {error, {Key,Error}}
 	    end
     end.
