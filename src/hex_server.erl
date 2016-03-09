@@ -67,6 +67,10 @@
 
 -include("../include/hex.hrl").
 
+-define(is_label(X),
+	(is_atom((X)) orelse is_integer((X)) orelse
+	 is_atom(hd((X))) orelse is_integer(hd((X))))).
+
 -define(SERVER, ?MODULE).
 -define(TABLE, hex_table).
 -define(OWNERTABLE, hex_item_owners).
@@ -81,7 +85,7 @@
 
 -record(map_item,
 	{
-	  label          :: integer() | atom(),          
+	  label          :: label(),
 	  nodeid         :: uint32(),  %% remote id
 	  channel        :: uint8(),   %% remote channel number
 	  type = dynamic :: static | dynamic 
@@ -89,7 +93,7 @@
 
 -record(int_event,
 	{
-	  label          :: integer() | atom(),          
+	  label          :: label(),
 	  ref            :: reference(),
 	  app            :: atom(),
 	  app_flags      :: [{Key::atom(), Value::term()}],
@@ -113,8 +117,8 @@
 	  nodeid = 0       :: integer(),
 	  tab              :: ets:tab(),
 	  owner_table      :: ets:tab(),
-	  out_list = []    :: [{Label::integer(), Pid::pid()}],
-	  in_list  = []    :: [{Label::integer(), Pid::pid()}],
+	  out_list = []    :: [{Label::label(), Pid::pid()}],
+	  in_list  = []    :: [{Label::label(), Pid::pid()}],
 	  evt_list = []    :: [#int_event{}],
 	  map = []         :: [#map_item{}],
 	  transmit_rules = []  :: [#hex_transmit{}],
@@ -1377,7 +1381,7 @@ match_value([Cond|Cs], A) -> match_value(Cond,A) andalso match_value(Cs, A);
 match_value([], _A) -> true;
 match_value(_, _) -> false.
 
-input(I, Value) when is_integer(I); is_atom(I) ->
+input(I, Value) when ?is_label(I) ->
     lager:debug("input ~w ~w", [I, Value]),
     try ets:lookup(?TABLE, {input,I}) of
 	[] ->

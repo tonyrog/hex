@@ -88,6 +88,8 @@
 			 andalso ((X) =< 16#7fffffffffffffff)) )).
 -define(is_timeout(T), ?is_uint32(T)).
 
+-type label() :: atom() | integer() | [atom()|integer()].
+
 -record(hex_signal,
 	{
 	  id      :: uint32(),   %% signal ID
@@ -115,14 +117,14 @@
 %% input rules
 -record(hex_input,
 	{
-	  label :: atom() | integer(),  %% rule id
+	  label :: label(),  %% rule id
 	  signal :: #hex_pattern{} | #hex_bin_pattern{}, %% input match pattern
 	  flags :: [{atom(),term()}]    %% input state flags
 	}).
 
 -record(hex_event,
 	{
-	  label     :: atom() | integer(),
+	  label     :: label(),
 	  flags = [] :: [{atom(),term()}],
 	  app       :: atom(),              %% application name of plugin
 	  app_flags :: [{atom(),term()}],   %% event application flags
@@ -131,14 +133,14 @@
 
 -record(hex_output,
 	{
-	  label :: atom() | integer(),
+	  label :: label(),  %% only integer()?
 	  flags = [] :: [{atom(),term()}],
 	  actions = []
 	}).
 
 -record(hex_transmit,
 	{
-	  label :: atom() | integer(),
+	  label :: label(),
 	  app   :: atom(),      %% signal transmittion app
 	  flags = [] :: [{atom(),term()}],
 	  signal :: #hex_pattern{}     %% signal to match

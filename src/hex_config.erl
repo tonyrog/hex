@@ -74,15 +74,16 @@ scan_([],_E,_I,_O,_T,Err) ->
     {error,Err}.
 
 add_event(E, Label, Flags, App, AppFlags, Sig, Err) ->
-    case lists:keyfind(Label, #hex_event.label, E) of
+    {ILabel,Err1} = internal_label(Label,Err),
+    case lists:keyfind(ILabel, #hex_event.label, E) of
 	false ->
-	    Err0 = case validate_event_flags(Flags) of
+	    Err2 = case validate_event_flags(Flags) of
 		       ok -> Err;
-		       Error1 -> [{event,Label,Error1}|Err]
+		       Error1 -> [{event,Label,Error1}|Err1]
 		   end,
-	    Err1 = case validate_event(App, in, AppFlags) of
-		       ok -> Err0;
-		       Error2 -> [{event,Label,Error2}|Err0]
+	    Err3 = case validate_event(App, in, AppFlags) of
+		       ok -> Err2;
+		       Error2 -> [{event,Label,Error2}|Err2]
 		   end,
 	    case hex_pattern(Sig) of
 		{ok,P} ->
@@ -96,37 +97,38 @@ add_event(E, Label, Flags, App, AppFlags, Sig, Err) ->
 				source = source
 			       },
 		    Event =
-			#hex_event { label=Label,
+			#hex_event { label=ILabel,
 				     flags=Flags,
 				     app=App,
 				     app_flags=AppFlags,
 				     signal=Signal },
-		    {[Event|E],Err1};
+		    {[Event|E],Err3};
 		Error3 ->
-		    {E, [{event,Label,Error3}|Err1]}
+		    {E, [{event,Label,Error3}|Err3]}
 	    end;
 	_ ->
-	    {E, [{event,Label,{error,ealready}} | Err]}
+	    {E, [{event,Label,{error,ealready}} | Err1]}
     end.
 
 
 add_input(I, Label, Sig, Flags, Err) ->
-    case lists:keyfind(Label, #hex_input.label, I) of
+    {ILabel,Err1} = internal_label(Label,Err),
+    case lists:keyfind(ILabel, #hex_input.label, I) of
 	false ->
-	    Err1 = 
+	    Err2 = 
 		case hex_input:validate_flags(Flags) of
 		    ok -> Err;
-		    Error1 -> [{input,Label,Error1}|Err]
+		    Error1 -> [{input,Label,Error1}|Err1]
 		end,
 	    case hex_pattern(Sig) of
 		{ok,Pattern} ->
 		    Input = 
-			#hex_input { label = Label,
+			#hex_input { label = ILabel,
 				     signal = Pattern,
 				     flags = Flags },
-		    { [Input|I], Err1 };
+		    { [Input|I], Err2 };
 		Error ->
-		    {I, [{input,Label,Error}|Err1]}
+		    {I, [{input,Label,Error}|Err2]}
 	    end;
 	_ ->
 	    {I, [{input,Label,{error,ealready}} | Err]}
@@ -155,26 +157,54 @@ add_output(O,Label,Flags,Actions,Err) ->
     end.
 
 add_transmit(T, Label, App, Flags, Sig, Err) ->
+    {ILabel,Err1} = internal_label(Label,Err),
     case lists:keyfind(Label, #hex_transmit.label, T) of
 	false ->
-	    Err1 = case validate_event(App, out, Flags) of
-		       ok -> Err;
-		       Error1 -> [{transmit,Label,Error1}|Err]
+	    Err2 = case validate_event(App, out, Flags) of
+		       ok -> Err1;
+		       Error1 -> [{transmit,Label,Error1}|Err1]
 		   end,
 	    case hex_pattern(Sig) of
 		{ok,Pattern} ->
 		    Trans =
-			#hex_transmit { label=Label,
+			#hex_transmit { label=ILabel,
 					app=App,
 					flags=Flags,
 					signal=Pattern },
-		    {[Trans|T],Err1};
+		    {[Trans|T],Err2};
 		Error2 ->
-		    {T, [{transmit,Label,Error2}|Err1]}
+		    {T, [{transmit,Label,Error2}|Err2]}
 	    end;
 	_ ->
 	    {T, [{transmit,Label,{error,ealready}} | Err]}
     end.
+%%
+%% external labels:
+%% 1: "a.b.5.x"     -> [a,b,5,x]
+%% 2: xyz           -> xyz
+%% 3: 17            -> 17
+%% 4: <<"a.b.5.x">> -> [a,b,5,x]
+%%
+internal_label(String,Err) when is_list(String) ->
+    ILabel = [ try list_to_integer(X) of
+		   Y -> Y
+	       catch
+		   error:_ -> list_to_atom(X)
+	       end || X <- string:tokens(String, ".")],
+    {ILabel,Err};
+internal_label(Binary,Err) when is_binary(Binary) ->
+    ILabel = [ try binary_to_integer(X) of
+		   Y -> Y
+	       catch
+		   error:_ -> binary_to_atom(X,latin1)
+	       end || X <- binary:split(Binary, <<".">>, [global])],
+    {ILabel,Err};
+internal_label(X,Err) when is_integer(X) ->
+    {X, Err};
+internal_label(X,Err) when is_atom(X) ->
+    {X, Err};
+internal_label(X,Err) ->
+    [{bad_name,X} | Err].
 
 is_output([{Name,I}|Out]) when is_atom(Name), is_integer(I), I > 0, I < 255 ->
     is_output(Out);
@@ -184,7 +214,6 @@ is_output([]) ->
     true;
 is_output(_) ->
     false.
-
 
 %% translate event pattern into internal form
 hex_pattern({ID,Chan,Type,Value}) ->
