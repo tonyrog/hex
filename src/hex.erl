@@ -178,16 +178,16 @@ alarm_confirm(Label) ->
 %%
 %% Input/Output access
 %%
-input2pid(Label) when is_atom(Label) ->
+input2pid(Label) ->
     hex_server:input2pid(Label).
 
-input_active(Label, TrueOrFalse) when is_atom(Label), is_boolean(TrueOrFalse) ->
+input_active(Label, TrueOrFalse) when is_boolean(TrueOrFalse) ->
     hex_server:input_active(Label, TrueOrFalse).
 
-input2outputs(Label) when is_atom(Label) ->
+input2outputs(Label) ->
     hex_server:input2outputs(Label).
 
-input2output_pids(Label) when is_atom(Label) ->
+input2output_pids(Label) ->
     hex_server:input2output_pids(Label).
 
 output2pid(Channel) when is_integer(Channel) ->
@@ -209,7 +209,7 @@ set_signal_value(Signal, Value) ->
 %%
 %% Input/Output debug
 %%
-debug_input(Label) when is_atom(Label); is_integer(Label) ->
+debug_input(Label) ->
     case hex_server:input2pid(Label) of
 	Pid when is_pid(Pid) -> ale:trace(on, Pid, debug);
 	E -> E
@@ -223,7 +223,7 @@ debug_output(Channel) when is_integer(Channel) ->
 debug_output(Pid) when is_pid(Pid) ->
     ale:trace(on, Pid, debug).
 
-debug_inout(Label) when is_atom(Label); is_integer(Label) ->
+debug_inout(Label) ->
     case hex_server:input2output_pids(Label) of
 	Pids when is_list(Pids) ->
 	    debug_input(Label),
