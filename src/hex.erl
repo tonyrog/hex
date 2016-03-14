@@ -45,6 +45,7 @@
 -export([signal/5]).
 -export([set_signal_value/2]).
 -export([input_active/2]).
+-export([internal_label/1, external_label/1]).
 
 %% Debug API
 -export([debug_input/1]).
@@ -154,7 +155,7 @@ event_list() ->
 
 %% Get the signal belonging to event with label Label
 event_signal(Label) ->
-    hex_server:event_signal(Label).
+    hex_server:event_signal(internal_label(Label)).
 
 %% Send an event to hex
 event(Signal) ->
@@ -164,31 +165,65 @@ event(Signal, Env) ->
 
 %% Send an event that will also be transmitted to the can bus
 event_and_transmit(Label, Value) ->
-    hex_server:event_and_transmit(Label, Value).
+    hex_server:event_and_transmit(internal_label(Label), Value).
 
 %% Send an analog event that will also be transmitted to the can bus
 analog_event_and_transmit(Label, Value) ->
-    hex_server:analog_event_and_transmit(Label, Value).
+    hex_server:analog_event_and_transmit(internal_label(Label), Value).
 
 %% Send an alarm ack that will also be transmitted to the can bus
 alarm_confirm(Label) ->
-    hex_server:alarm_confirm(Label).
+    hex_server:alarm_confirm(internal_label(Label)).
 
 
+%% Label conversion
+internal_label([Head | _Tail] = Label) when is_integer(Head) ->
+    %% String
+    try tree_db:internal_key(Label) of
+	ILabel -> ILabel
+    catch
+	error:_Reason -> 
+	    lager:warning("Can not convert ~p to internal format, reason ~p.",
+			  [Label, _Reason]),
+	    Label
+    end;
+internal_label([Head | _Tail] = Label) when is_atom(Head) ->
+    %% Already internal
+    Label;
+internal_label(Label) when is_atom(Label); is_integer(Label) ->
+    %% Old format
+    Label.
+    
+external_label([Head | _Tail] = Label) when is_atom(Head) ->
+    %% String
+    try tree_db:external_key(Label) of
+	ELabel -> ELabel
+    catch
+	error:_Reason -> 
+	    lager:warning("Can not convert ~p to external format, reason ~p.",
+			  [Label, _Reason]),
+	    Label
+    end;
+external_label([Head | _Tail] = Label) when is_integer(Head) ->
+    %% Already external
+    Label;
+external_label(Label) when is_atom(Label); is_integer(Label) ->
+    %% Old format
+    Label.
 %%
 %% Input/Output access
 %%
 input2pid(Label) ->
-    hex_server:input2pid(Label).
+    hex_server:input2pid(internal_label(Label)).
 
 input_active(Label, TrueOrFalse) when is_boolean(TrueOrFalse) ->
-    hex_server:input_active(Label, TrueOrFalse).
+    hex_server:input_active(internal_label(Label), TrueOrFalse).
 
 input2outputs(Label) ->
-    hex_server:input2outputs(Label).
+    hex_server:input2outputs(internal_label(Label)).
 
 input2output_pids(Label) ->
-    hex_server:input2output_pids(Label).
+    hex_server:input2output_pids(internal_label(Label)).
 
 output2pid(Channel) when is_integer(Channel) ->
     hex_server:output2pid(Channel).
@@ -210,7 +245,7 @@ set_signal_value(Signal, Value) ->
 %% Input/Output debug
 %%
 debug_input(Label) ->
-    case hex_server:input2pid(Label) of
+    case hex_server:input2pid(internal_label(Label)) of
 	Pid when is_pid(Pid) -> ale:trace(on, Pid, debug);
 	E -> E
     end.
@@ -224,9 +259,9 @@ debug_output(Pid) when is_pid(Pid) ->
     ale:trace(on, Pid, debug).
 
 debug_inout(Label) ->
-    case hex_server:input2output_pids(Label) of
+    case hex_server:input2output_pids(internal_label(Label)) of
 	Pids when is_list(Pids) ->
-	    debug_input(Label),
+	    debug_input(internal_label(Label)),
 	    lists:foreach(fun(Pid) -> debug_output(Pid) end, Pids);
 	E -> E
     end.
