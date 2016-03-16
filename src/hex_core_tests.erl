@@ -121,10 +121,10 @@ interp([Expr | Es], R, Acc) ->
 	    R1 = hex_core:add_expr(hex_core:parse(Expr), R),
 	    interp(Es, R1, Acc);
 	{add,Expr} when is_tuple(Expr) ->
-	    R1 = hex_core:add_expr(Expr, R),
+	    {_V, R1} = hex_core:add_expr(Expr, R),
 	    interp(Es, R1, Acc);
 	{set, Var, Value} ->
-	    R1 = hex_core:set_value(Var, Value, R),
+	    {_V, R1} = hex_core:set_value(Var, Value, R),
 	    interp(Es, R1, Acc);
 	{set, VarValues} ->
 	    R1 = hex_core:set_values(VarValues, R),

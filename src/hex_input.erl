@@ -102,7 +102,7 @@
 	  an_mask = 0  :: uint32(),             %% analog latch_mask
 	  an_inhibit = 0  :: uint32(),          %% abs micro seconds
 	  src          :: term(),               %% last source
-	  timestamp    :: erlang:timestamp(),   %% last time
+	  timestamp    :: non_neg_integer(),   %% last time
 	  timer        :: reference() | undefined,
 	  estep = 0    :: integer(),            %% push encoder value
 	  config       :: #opt{}
