@@ -42,8 +42,9 @@
 -export([output/3, 
 	 input/2, 
 	 event/2, 
-	 event_and_transmit/2, 
+	 digital_event_and_transmit/2, 
 	 analog_event_and_transmit/2, 
+	 encoder_event_and_transmit/2, 
 	 transmit/2,
 	 alarm_confirm/1]).
 
@@ -182,11 +183,14 @@ event_list() ->
 event_signal(Label) ->
     gen_server:call(?SERVER, {event_signal, Label}).
     
-event_and_transmit(Label, Value) ->
-    gen_server:call(?SERVER, {event_and_transmit, Label, Value}).
+digital_event_and_transmit(Label, Value) ->
+    gen_server:call(?SERVER, {digital_event_and_transmit, Label, Value}).
 
 analog_event_and_transmit(Label, Value) ->
     gen_server:call(?SERVER, {analog_event_and_transmit, Label, Value}).
+
+encoder_event_and_transmit(Label, Value) ->
+    gen_server:call(?SERVER, {encoder_event_and_transmit, Label, Value}).
 
 alarm_confirm(Label) ->
     gen_server:call(?SERVER, {alarm_confirm, Label}).
@@ -430,7 +434,7 @@ handle_call({input2output_pids, Label}, _From,
 	    {reply, Reply, State};
 	{error, _Reason} = E -> {reply, E, State}
     end;
-handle_call({event_and_transmit, Label, Value}, _From, 
+handle_call({digital_event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
     lager:debug("event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
@@ -451,7 +455,7 @@ handle_call({event_and_transmit, Label, Value}, _From,
     end;
 handle_call({analog_event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
-    lager:debug("event_and_transmit: ~p\n", [Label]),
+    lager:debug("analog_event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
 	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
 		     alarm = Alarm}, 1}
@@ -462,6 +466,26 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 	    {reply, ok, NewState};
 	{#int_event {signal = Signal},_} ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
+	    run_transmit(Signal1, State#state.transmit_rules),
+	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
+	    {reply, ok, NewState};
+	{false, _} ->
+	    lager:debug("Unknown label ~p", [Label]),
+	    {reply, {error, unknown_event}, State}
+    end;
+handle_call({encoder_event_and_transmit, Label, Value}, _From, 
+	    State=#state {evt_list = EList}) ->
+    lager:debug("encoder_event_and_transmit: ~p\n", [Label]),
+    case {lists:keyfind(Label, #int_event.label, EList), Value} of
+	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
+		     alarm = Alarm}, 1}
+	  when Alarm > 0 ->
+	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ENCODER},
+	    alarm_confirm(Label, Signal1, State),
+	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
+	    {reply, ok, NewState};
+	{#int_event {signal = Signal},_} ->
+	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ENCODER},
 	    run_transmit(Signal1, State#state.transmit_rules),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};

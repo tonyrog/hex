@@ -38,7 +38,9 @@
 	 remove/0]).
 -export([event/1, event/2]).
 -export([event_and_transmit/2]).
+-export([digital_event_and_transmit/2]).
 -export([analog_event_and_transmit/2]).
+-export([encoder_event_and_transmit/2]).
 -export([alarm_confirm/1]).
 -export([event_list/0]).
 -export([event_signal/1]).
@@ -165,11 +167,19 @@ event(Signal, Env) ->
 
 %% Send an event that will also be transmitted to the can bus
 event_and_transmit(Label, Value) ->
-    hex_server:event_and_transmit(internal_label(Label), Value).
+    digital_event_and_transmit(Label, Value).
+
+%% Send an event that will also be transmitted to the can bus
+digital_event_and_transmit(Label, Value) ->
+    hex_server:digital_event_and_transmit(internal_label(Label), Value).
 
 %% Send an analog event that will also be transmitted to the can bus
 analog_event_and_transmit(Label, Value) ->
     hex_server:analog_event_and_transmit(internal_label(Label), Value).
+
+%% Send an encoder event that will also be transmitted to the can bus
+encoder_event_and_transmit(Label, Value) ->
+    hex_server:encoder_event_and_transmit(internal_label(Label), Value).
 
 %% Send an alarm ack that will also be transmitted to the can bus
 alarm_confirm(Label) ->
