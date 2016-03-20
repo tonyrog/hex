@@ -26,6 +26,7 @@
 -define(HEX_RFID,           16#6200).  %% channel=type data=rfid:32
 -define(HEX_BATTERY,        16#6201).  %% sub=bank, data=volt:16, amp:16
 -define(HEX_LOAD,           16#6202).  %% data=amp:16  amp=A*100
+-define(HEX_FEED,           16#2817).  %% feed output watch dog
 
 -define(HEX_POWER_ON,       16#2800).  %% Power ON
 -define(HEX_POWER_OFF,      16#2801).  %% Sent by unit before powerdown
@@ -36,6 +37,7 @@
 -define(HEX_OUTPUT_DEL,     16#2805).  %% Delete output interface
 -define(HEX_OUTPUT_ACTIVE,  16#2806).  %% Active/Deactivate signal
 -define(HEX_OUTPUT_VALUE,   16#280D).  %% Current value update
+-define(HEX_OUTPUT_STEP,    16#2816).  %% Current step update
 
 -define(HEX_ALARM_CNFRM_ACK,16#2809).   %% Alarm ack code notification
 -define(HEX_ALARM_CNFRM,    16#280E).   %% Confirm larm condition (from client)

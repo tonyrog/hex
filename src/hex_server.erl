@@ -45,6 +45,7 @@
 	 digital_event_and_transmit/2, 
 	 analog_event_and_transmit/2, 
 	 encoder_event_and_transmit/2, 
+	 feed_event_and_transmit/2, 
 	 transmit/2,
 	 alarm_confirm/1]).
 
@@ -111,6 +112,7 @@
 	  alarm=0        :: integer(), %% alarm id (0=ok)
 	  analog_value=0 :: integer(),
 	  state=0        :: integer(),
+	  step_value = 0 :: integer(), %% (Max:16 << 16 | Current:16)
 	  active=false   :: boolean()  %% status of id:chan 
 	}).
 
@@ -191,6 +193,9 @@ analog_event_and_transmit(Label, Value) ->
 
 encoder_event_and_transmit(Label, Value) ->
     gen_server:call(?SERVER, {encoder_event_and_transmit, Label, Value}).
+
+feed_event_and_transmit(Label, Value) ->
+    gen_server:call(?SERVER, {feed_event_and_transmit, Label, Value}).
 
 alarm_confirm(Label) ->
     gen_server:call(?SERVER, {alarm_confirm, Label}).
@@ -486,6 +491,19 @@ handle_call({encoder_event_and_transmit, Label, Value}, _From,
 	    {reply, ok, NewState};
 	{#int_event {signal = Signal},_} ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ENCODER},
+	    run_transmit(Signal1, State#state.transmit_rules),
+	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
+	    {reply, ok, NewState};
+	{false, _} ->
+	    lager:debug("Unknown label ~p", [Label]),
+	    {reply, {error, unknown_event}, State}
+    end;
+handle_call({feed_event_and_transmit, Label, Value}, _From, 
+	    State=#state {evt_list = EList}) ->
+    lager:debug("feed_event_and_transmit: ~p\n", [Label]),
+    case {lists:keyfind(Label, #int_event.label, EList), Value} of
+	{#int_event {signal = Signal},_} ->
+	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_FEED},
 	    run_transmit(Signal1, State#state.transmit_rules),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
@@ -933,6 +951,7 @@ run_event(Signal, Data, Rules, State)
         ?HEX_OUTPUT_ACTIVE -> run_output_action(active, Signal, State);
         ?HEX_OUTPUT_VALUE -> run_output_action(value, Signal, State);
         ?HEX_OUTPUT_STATE -> run_output_action(state, Signal, State);
+        ?HEX_OUTPUT_STEP  -> run_output_action(step, Signal, State);
 	%% ?HEX_POWER_OFF -> run_power_off(Signal, Rules, State);
 	%% ?HEX_WAKEUP    -> run_wakeup(Signal, Rules, State);
 	?HEX_ALARM        -> run_alarm(Signal, State);
@@ -1146,6 +1165,8 @@ event_action(active, Event, Active, Subs) ->
     event_active(Event, Active, Subs);
 event_action(value, Event, Value, Subs) ->
     event_value(Event, Value, Subs);
+event_action(step, Event, Value, Subs) ->
+    event_step(Event, Value, Subs);
 event_action(state, Event, Value, Subs) ->
     event_state(Event, Value, Subs).
 
@@ -1163,6 +1184,13 @@ event_value(E=#int_event {label = Label, app = App, app_flags = AppFlags},
     Event = [{'event-type','output-value'}, {label, Label}, {value, Value}],
     inform_subscribers(Event, Subs),
     E#int_event {analog_value = Value}.
+
+event_step(E=#int_event {label = Label, app = App, app_flags = AppFlags},
+	   Value, Subs) ->
+    App:output(AppFlags, [{output_step, Value}]),
+    Event = [{'event-type','output-step'}, {label, Label}, {value, Value}],
+    inform_subscribers(Event, Subs),
+    E#int_event {step_value = Value}.
 
 event_state(E=#int_event {label = Label, app = App, app_flags = AppFlags},
 	   Value, Subs) ->

@@ -41,6 +41,7 @@
 -export([digital_event_and_transmit/2]).
 -export([analog_event_and_transmit/2]).
 -export([encoder_event_and_transmit/2]).
+-export([feed_event_and_transmit/2]).
 -export([alarm_confirm/1]).
 -export([event_list/0]).
 -export([event_signal/1]).
@@ -180,6 +181,10 @@ analog_event_and_transmit(Label, Value) ->
 %% Send an encoder event that will also be transmitted to the can bus
 encoder_event_and_transmit(Label, Value) ->
     hex_server:encoder_event_and_transmit(internal_label(Label), Value).
+
+%% Send an feed the watchdog event that will also be transmitted to the can bus
+feed_event_and_transmit(Label, Value) ->
+    hex_server:feed_event_and_transmit(internal_label(Label), Value).
 
 %% Send an alarm ack that will also be transmitted to the can bus
 alarm_confirm(Label) ->
