@@ -200,7 +200,7 @@ internal_label([Head | _Tail] = Label) when is_integer(Head) ->
 	error:_Reason -> 
 	    lager:warning("Can not convert ~p to internal format, reason ~p.",
 			  [Label, _Reason]),
-	    Label
+	    {error, invalid_label}
     end;
 internal_label([Head | _Tail] = Label) when is_atom(Head) ->
     %% Already internal
@@ -217,7 +217,7 @@ external_label([Head | _Tail] = Label) when is_atom(Head) ->
 	error:_Reason -> 
 	    lager:warning("Can not convert ~p to external format, reason ~p.",
 			  [Label, _Reason]),
-	    Label
+	    {error, invalid_label}
     end;
 external_label([Head | _Tail] = Label) when is_integer(Head) ->
     %% Already external
