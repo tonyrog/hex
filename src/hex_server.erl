@@ -164,16 +164,36 @@ load(File)
 
 add(Config)  
   when is_list(Config) ->
-    gen_server:call(?SERVER, {add, Config, self()}).
+    case is_up() of
+	true ->
+	    gen_server:call(?SERVER, {add, Config, self()});
+	false ->
+	    {error, not_up}
+    end.
 
 remove()  ->
-    gen_server:call(?SERVER, {remove, self()}).
+    case is_up() of
+	true ->
+	    gen_server:call(?SERVER, {remove, self()});
+	false ->
+	    {error, not_up}
+    end.
 
 subscribe(Args) ->
-    gen_server:call(?SERVER, {subscribe, self(), Args}).
+    case is_up() of
+	true ->
+	    gen_server:call(?SERVER, {subscribe, self(), Args});
+	false ->
+	    {error, not_up}
+    end.
 
 unsubscribe() ->
-    gen_server:call(?SERVER, {unsubscribe, self()}).
+    case is_up() of
+	true ->
+	    gen_server:call(?SERVER, {unsubscribe, self()});
+	false ->
+	    {error, not_up}
+    end.
 
 inform(Type, Options)   
   when is_atom(Type), is_list(Options)->
@@ -672,7 +692,12 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
+is_up() ->
+    case whereis(?SERVER) of
+	Pid when is_pid(Pid) -> true;
+	undefined -> false
+    end.
+    
 reload({file,File}, State) ->
     ?dbg("---------------------\n"
 	 " HEX_SERVER RELOAD   \n"
