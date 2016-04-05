@@ -1397,7 +1397,8 @@ reset(Id, [#map_item{nodeid = Id, label = Label} | Map],
 			     state = 0, 
 			     active = false} | Rest];
 	    false ->
-		lager:warning("Event ~p not found",[Label])
+		lager:warning("Event ~p not found",[Label]),
+		Events
 	end,
     reset(Id, Map, State#state{evt_list = NewEvents}, Acc);
 reset(Id, [MapItem|Map], State, Acc) ->
