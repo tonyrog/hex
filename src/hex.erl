@@ -24,6 +24,7 @@
 
 -export([start/0, debug/0]).
 -export([start_all/1]).
+-export([start_all/2]).
 -export([auto_join/1, join_async/1, join/1]).
 -export([validate_flags/2]).
 -export([text_expand/2]).
@@ -74,22 +75,27 @@ start() ->
 %% utility since application:ensure_all_started is not present in R15
 %% this must be used for now.
 start_all(App) when is_atom(App) ->
-    each_application_([App], []);
+    each_application_([App], [], temporary);
 start_all(Apps) when is_list(Apps) ->
-    each_application_(Apps, []).
+    each_application_(Apps, [], temporary).
 
-each_application_([App|Apps], Started) ->
-    case application:start(App) of
+start_all(App, RestartType) when is_atom(App) ->
+    each_application_([App], [], RestartType);
+start_all(Apps, RestartType) when is_list(Apps) ->
+    each_application_(Apps, [], RestartType).
+
+each_application_([App|Apps], Started, RestartType) ->
+    case application:start(App, RestartType) of
 	{error,{not_started,App1}} ->
-	    each_application_([App1,App|Apps],Started);
+	    each_application_([App1,App|Apps],Started, RestartType);
 	{error,{already_started,App}} ->
-	    each_application_(Apps,Started);
+	    each_application_(Apps,Started, RestartType);
 	ok ->
-	    each_application_(Apps,[App|Started]);
+	    each_application_(Apps,[App|Started], RestartType);
 	Error ->
 	    Error
     end;
-each_application_([], Started) ->
+each_application_([], Started, _RestartType) ->
     {ok, Started}.
 
 %%
