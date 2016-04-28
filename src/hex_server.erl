@@ -552,12 +552,12 @@ handle_call(dump_map, _From, State) ->
     Map = State#state.map,
     lists:foreach(
       fun(M) ->
-	      io:format("~6.16.0B:~3w ~p\n", [M#map_item.nodeid band 16#ffffff,
+	      io:format("~6.16.0B:~3w ~p\n", [M#map_item.nodeid,
 					      M#map_item.channel,
 					      M#map_item.label])
       end, lists:sort(fun(A, B) ->
-			      An = A#map_item.nodeid band 16#ffffff,
-			      Bn = B#map_item.nodeid band 16#ffffff,
+			      An = A#map_item.nodeid,
+			      Bn = B#map_item.nodeid,
 			      if An < Bn -> true;
 				 An =:= Bn -> 
 				      A#map_item.channel < B#map_item.channel;
@@ -1013,7 +1013,7 @@ active([_Flag | Flags]) -> active(Flags).
 
 run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
     lager:debug("run_power_on: ~p", [Signal]),
-    State1 = reset(RId, Map, State, []),
+    State1 = reset(simplify(RId), Map, State, []),
     State2 = add_node(Signal, State1),     
     add_outputs(Signal, Rules, State2).
 
@@ -1066,9 +1066,8 @@ run_output_add(Signal=#hex_signal {id=_RId, chan=_RChan, value = Value},
 	       State=#state {evt_list = EvtList}) ->
     %% lager:debug("run_output_add: ~p", [Signal]),
     {Id, Chan} = value2nid(Value),
-    ?dbg("~6.16.0B:~3w ~6.16.0B:~w action=~w\n",
-	 [_RId band 16#ffffff, _RChan, Id band 16#ffffff, Chan,
-	  output_add]),
+    ?dbg("~8.16.0B:~3w ~8.16.0B:~w action=~w\n",
+	 [clean(_RId) _RChan, clean(Id), Chan, output_add]),
     lager:debug("run_output_add: ~.16B ~p", [Id, Chan]),
     if Chan >=1, Chan =< 254 -> 
 	    run_output_add(Id, Chan, Signal, EvtList, State);
@@ -1082,7 +1081,7 @@ run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
     SigNodeId = clean(S#hex_signal.id),
     if Id =:= SigNodeId,
        LChan =:= S#hex_signal.chan ->
-	    NewState = run_output_add(RId, RChan, Label, State),
+	    NewState = run_output_add(simplify(RId), RChan, Label, State),
 	    run_output_add(Id, LChan, Signal, Events, NewState);
        true ->
 	    run_output_add(Id, LChan, Signal, Events, State)
@@ -1093,10 +1092,10 @@ run_output_add(_Id, _LChan, _Signal, [], State) ->
     State.
 
 run_output_add(RId, RChan, Label, State=#state{map = Map}) ->
-    case find_map_item(Map, Label, RId, RChan) of
+    case find_map_item(Map, Label, RId , RChan) of
 	{true,_M} -> 
 	    lager:debug("output-add, already mapped: ~6.16.0B:~3w ~p\n", 
-		 [_M#map_item.nodeid band 16#ffffff,
+		 [_M#map_item.nodeid,
 		  _M#map_item.channel,
 		  _M#map_item.label]),
 	    %% Resent output_add clears alarm
@@ -1107,7 +1106,7 @@ run_output_add(RId, RChan, Label, State=#state{map = Map}) ->
 			  channel = RChan,
 			  type = dynamic},
 	    lager:debug("run_output_add: item ~6.16.0B:~3w ~p", 
-			[M#map_item.nodeid band 16#ffffff,
+			[M#map_item.nodeid,
 			 M#map_item.channel,
 			 M#map_item.label]),
 	    State#state {map = [M | Map]}
@@ -1131,7 +1130,7 @@ run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
     SigNodeId = clean(S#hex_signal.id) ,
     if Id =:= SigNodeId,
        LChan =:= S#hex_signal.chan ->
-	    NewState = run_output_del(RId, RChan, Label, State), 
+	    NewState = run_output_del(simplify(RId), RChan, Label, State), 
 	    run_output_del(Id, LChan, Signal, Events, NewState);
        true ->
 	    run_output_del(Id, LChan, Signal, Events, State)
@@ -1158,10 +1157,10 @@ run_output_action(Action,
 		  Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 		  State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
-    ?dbg("~6.16.0B:~3w value=~p, action=~w\n",
-	 [Id band 16#ffffff, Chan, Value, Action]),
+    ?dbg("~8.16.0B:~3w value=~p, action=~w\n",
+	 [clean(Id), Chan, Value, Action]),
     %%Id = clean(Id0),
-    run_output_action(Action, Id, Chan, Value, Map, State).
+    run_output_action(Action, simplify(Id), Chan, Value, Map, State).
 
 run_output_action(_Action, _Id, _Chan, _Value, [], State) ->
     State;
@@ -1226,13 +1225,13 @@ event_state(E=#int_event {label = Label, app = App, app_flags = AppFlags},
 
 
 run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
-	       State=#state {map = Map}) ->
+	  State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
-    run_alarm(Id, Chan, Value, Map, State).
+    run_alarm(simplify(Id), Chan, Value, Map, State).
 
 run_alarm(Id, Chan, Alarm, 
-	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
-	       State=#state{evt_list = EList, subs = Subs}) ->
+	  [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
+	  State=#state{evt_list = EList, subs = Subs}) ->
     NewElist = event_alarm(Label, Alarm, EList, [], Subs),
     run_alarm(Id, Chan, Alarm, Map, State#state{evt_list = NewElist});
 run_alarm(Id, Chan, Alarm, [_MapItem | Map], State) ->
@@ -1280,7 +1279,7 @@ alarm_confirm(Label, #hex_signal{id = Id, chan = Chan},
 run_alarm_confirm_ack(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
-    run_alarm_confirm_ack(Id, Chan, Value, Map, State).
+    run_alarm_confirm_ack(simplify(Id), Chan, Value, Map, State).
 
 run_alarm_confirm_ack(Id, Chan, Alarm, 
 	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
@@ -1310,7 +1309,7 @@ event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->
 run_output_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
-    run_output_alarm(Id, Chan, Value, Map, State).
+    run_output_alarm(simplify(Id), Chan, Value, Map, State).
 
 run_output_alarm(Id, Chan, AlarmState, 
 	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
@@ -1379,17 +1378,6 @@ match_options([{Key,Value}|Ks], MatchOptions) ->
 match_options([], _MatchOptions) ->
     true.
 	
-value2nid(Value) ->
-    Id0 = Value bsr 8,
-    Id  = if Id0 < 127 -> Id0;
-	      true -> Id0 bor ?HEX_COBID_EXT
-	   end,
-    Chan = (Value band 16#ff),
-    {Id, Chan}.
-
-clean(NodeId) ->
-    NodeId band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT).
- 
 find_map_item([M=#map_item{label=Label,nodeid=Id,channel=Chan}|_Map],
 	      Label,Id,Chan) ->
     {true,M};
@@ -1460,6 +1448,23 @@ run_transmit_(Signal, [Rule|Rules]) ->
     end;
 run_transmit_(_Signal, []) ->
     ok.
+
+value2nid(Value) ->
+    Id0 = Value bsr 8,
+    Id  = if Id0 < 127 -> Id0;
+	      true -> Id0 bor ?HEX_COBID_EXT
+	   end,
+    Chan = (Value band 16#ff),
+    {Id, Chan}.
+
+clean(NodeId) ->
+    %% When comparing signals
+    NodeId band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT).
+ 
+simplify(NodeId) ->
+    %% When dealing with #map_item.
+    NodeId band 16#ffffff.
+
 
 match_pattern(Sig, Pat) ->
     match_pattern(Sig, <<>>, Pat).
