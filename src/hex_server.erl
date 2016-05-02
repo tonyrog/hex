@@ -1020,9 +1020,8 @@ run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
 add_node(Signal=#hex_signal {id = RId}, State=#state{evt_list = Events}) ->
     lager:debug("add_node: ~.16B ", [RId]),
     %% Node has channel 0
-    run_output_add(clean(hex:make_self(State#state.nodeid)), 0, 
+    run_output_add(clean(RId), 0, 
 		   Signal#hex_signal {chan = 0}, Events, State).
-		
 	    
 add_outputs(Signal, [Rule|Rules], State) ->
     RulePattern = Rule#hex_input.signal,
@@ -1094,7 +1093,7 @@ run_output_add(_Id, _LChan, _Signal, [], State) ->
 run_output_add(RId, RChan, Label, State=#state{map = Map}) ->
     case find_map_item(Map, Label, RId , RChan) of
 	{true,_M} -> 
-	    lager:debug("output-add, already mapped: ~6.16.0B:~3w ~p\n", 
+	    lager:debug("output-add, already mapped: ~8.16.0B:~3w ~p\n", 
 		 [_M#map_item.nodeid,
 		  _M#map_item.channel,
 		  _M#map_item.label]),
@@ -1105,7 +1104,7 @@ run_output_add(RId, RChan, Label, State=#state{map = Map}) ->
 			  nodeid = RId,
 			  channel = RChan,
 			  type = dynamic},
-	    lager:debug("run_output_add: item ~6.16.0B:~3w ~p", 
+	    lager:debug("run_output_add: item ~8.16.0B:~3w ~p", 
 			[M#map_item.nodeid,
 			 M#map_item.channel,
 			 M#map_item.label]),
