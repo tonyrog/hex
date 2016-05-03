@@ -463,7 +463,15 @@ handle_call({digital_event_and_transmit, Label, Value}, _From,
 	    State=#state {evt_list = EList}) ->
     lager:debug("event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
-	{#int_event {signal = Signal, alarm = Alarm}, 1}
+	{#int_event {signal = (#hex_signal {chan = LChan,
+					    type = ?HEX_ALARM_CNFRM})}, 1}
+	  when LChan > 254 ->
+	    %% This is probably an event for confirming 
+	    %% a power_zone alarm, ignore
+	    lager:debug("channel ~p not possible", [LChan]),
+	    {reply, ok, State};
+	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
+		     alarm = Alarm}, 1}
 	  when Alarm > 0 ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_DIGITAL},
 	    alarm_confirm(Label, Signal1, State),
@@ -482,6 +490,13 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 	    State=#state {evt_list = EList}) ->
     lager:debug("analog_event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
+	{#int_event {signal = (#hex_signal {chan = LChan,
+					    type = ?HEX_ALARM_CNFRM})}, 1}
+	  when LChan > 254 ->
+	    %% This is probably an event for confirming 
+	    %% a power_zone alarm, ignore
+	    lager:debug("channel ~p not possible", [LChan]),
+	    {reply, ok, State};
 	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
 		     alarm = Alarm}, 1}
 	  when Alarm > 0 ->
@@ -502,6 +517,13 @@ handle_call({encoder_event_and_transmit, Label, Value}, _From,
 	    State=#state {evt_list = EList}) ->
     lager:debug("encoder_event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
+	{#int_event {signal = (#hex_signal {chan = LChan,
+					    type = ?HEX_ALARM_CNFRM})}, 1}
+	  when LChan > 254 ->
+	    %% This is probably an event for confirming 
+	    %% a power_zone alarm, ignore
+	    lager:debug("channel ~p not possible", [LChan]),
+	    {reply, ok, State};
 	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
 		     alarm = Alarm}, 1}
 	  when Alarm > 0 ->
@@ -522,6 +544,13 @@ handle_call({feed_event_and_transmit, Label, Value}, _From,
 	    State=#state {evt_list = EList}) ->
     lager:debug("feed_event_and_transmit: ~p\n", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
+	{#int_event {signal = (#hex_signal {chan = LChan,
+					    type = ?HEX_ALARM_CNFRM})}, 1}
+	  when LChan > 254 ->
+	    %% This is probably an event for confirming 
+	    %% a power_zone alarm, ignore
+	    lager:debug("channel ~p not possible", [LChan]),
+	    {reply, ok, State};
 	{#int_event {signal = Signal},_} ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_FEED},
 	    run_transmit(Signal1, State#state.transmit_rules),
@@ -535,8 +564,18 @@ handle_call({alarm_confirm, Label}, _From,
 	    State=#state {evt_list = EList}) ->
     lager:debug("alarm_confirm: ~p\n", [Label]),
     case lists:keyfind(Label, #int_event.label, EList) of
+	#int_event {signal = (Signal=#hex_signal {type = ?HEX_ALARM_CNFRM,
+						  chan = LChan}), 
+		    alarm = Alarm}
+	  when LChan > 254 ->
+	    lager:debug("channel ~p converted to 0", [LChan]),
+	    if Alarm =:= 0 -> lager:warning("no knnown alarm for ~p", [Label]);
+	       true -> ok
+	    end,
+	    alarm_confirm(Label, Signal#hex_signal {chan = 0}, State),
+	    {reply, ok, State};
 	#int_event {signal = Signal, alarm = Alarm} ->
-	    if Alarm =:= 0 -> lager:warning("no alarm for ~p", [Label]);
+	    if Alarm =:= 0 -> lager:warning("no knnown alarm for ~p", [Label]);
 	       true -> ok
 	    end,
 	    alarm_confirm(Label, Signal, State),
@@ -916,18 +955,22 @@ remove_transmit(L, State=#state {transmit_rules = Rules}) ->
     end,
     State#state {transmit_rules = NewRules}.
 
-remove_event(L, State=#state {evt_list = EList}) ->
-    NewEList =
-	case lists:keytake(L, #int_event.label, EList) of
-	    false ->
-		lager:warning("event ~p not found", [L]),
-		EList;
-	    {value, #int_event {ref = Ref, app = App}, E} ->
-		App:del_event(Ref),
-		lager:debug("event ~p removed", [L]),
-		E
-    end,
-    State#state {evt_list = NewEList}.
+remove_event(L, State=#state {evt_list = EList, map = Map}) ->
+    case lists:keytake(L, #int_event.label, EList) of
+	false ->
+	    lager:warning("event ~p not found", [L]),
+	    State;
+	{value, #int_event {ref = Ref, app = App}, NewEList} ->
+	    App:del_event(Ref),
+	    lager:debug("event ~p removed", [L]),
+	    case lists:keytake(L, #map_item.label, Map) of
+		false ->
+		    State#state {evt_list = NewEList};
+		{value, _M, NewMap} ->
+		    lager:debug("event ~p removed from map", [L]),
+		    State#state {evt_list = NewEList, map = NewMap}
+	    end
+    end.
 
 remove_input(L, State=#state {tab = Tab, in_list = IList, input_rules = IRules}) ->
     ets:delete(Tab, {input, L}),
@@ -947,7 +990,7 @@ remove_input(L, State=#state {tab = Tab, in_list = IList, input_rules = IRules})
 	    end
     end.
 
-remove_output(L, State=#state {tab = Tab, out_list = OList, map = Map}) ->
+remove_output(L, State=#state {tab = Tab, out_list = OList}) ->
     ets:delete(Tab, {output, L}),
     case lists:keytake(L, 1, OList) of
 	false ->
@@ -956,14 +999,8 @@ remove_output(L, State=#state {tab = Tab, out_list = OList, map = Map}) ->
 	{value, {L, Pid}, NewOList} ->
 	    hex_output:stop(Pid),
 	    lager:debug("output ~p removed", [L]),
-	    case lists:keytake(L, #map_item.label, Map) of
-		false ->
-		    State#state {out_list = NewOList};
-		{value, _M, NewMap} ->
-		    lager:debug("output ~p removed from map", [L]),
-		    State#state {out_list = NewOList, map = NewMap}
-	    end
-    end.
+	    State#state {out_list = NewOList}
+   end.
 
 
 run_event(Signal, Data, Rules, State) 
@@ -1017,11 +1054,12 @@ run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
     State2 = add_node(Signal, State1),     
     add_outputs(Signal, Rules, State2).
 
-add_node(Signal=#hex_signal {id = RId}, State=#state{evt_list = Events}) ->
+add_node(Signal=#hex_signal {id = RId, chan = 0}, 
+	 State=#state{evt_list = Events}) ->
     lager:debug("add_node: ~.16B ", [RId]),
     %% Node has channel 0
-    run_output_add(clean(RId), 0, 
-		   Signal#hex_signal {chan = 0}, Events, State).
+    run_output_add(clean(hex:make_self(State#state.nodeid)), simplify(RId), 
+		   Signal, Events, State).
 	    
 add_outputs(Signal, [Rule|Rules], State) ->
     RulePattern = Rule#hex_input.signal,
@@ -1074,20 +1112,20 @@ run_output_add(Signal=#hex_signal {id=_RId, chan=_RChan, value = Value},
 	    State
     end.
 
-run_output_add(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan}, 
+run_output_add(LId, LChan, Signal=#hex_signal {id = RId, chan = RChan}, 
 	       [#int_event {label = Label, signal = S} | Events], State) 
   when is_integer(S#hex_signal.id) ->
     SigNodeId = clean(S#hex_signal.id),
-    if Id =:= SigNodeId,
+    if LId =:= SigNodeId,
        LChan =:= S#hex_signal.chan ->
-	    NewState = run_output_add(simplify(RId), RChan, Label, State),
-	    run_output_add(Id, LChan, Signal, Events, NewState);
+ 	    NewState = run_output_add(simplify(RId), RChan, Label, State),
+	    run_output_add(LId, LChan, Signal, Events, NewState);
        true ->
-	    run_output_add(Id, LChan, Signal, Events, State)
+	    run_output_add(LId, LChan, Signal, Events, State)
     end;
 run_output_add(Id, LChan, Signal, [_E | Events], State) ->
     run_output_add(Id, LChan, Signal, Events, State);
-run_output_add(_Id, _LChan, _Signal, [], State) ->
+run_output_add(_LId, _LChan, _Signal, [], State) ->
     State.
 
 run_output_add(RId, RChan, Label, State=#state{map = Map}) ->
