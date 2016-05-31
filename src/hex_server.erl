@@ -440,19 +440,19 @@ handle_call({input_active, Label, Active} = M, _From,
     end;
 handle_call({input2pid, Label}, _From, 
 	    State=#state {in_list = IList}) ->
-    lager:debug("input2pid: ~p\n", [Label]),
+    lager:debug("input2pid: ~p", [Label]),
     {reply, to_pid(Label, IList), State};
 handle_call({output2pid, Channel}, _From, 
 	    State=#state {out_list = OList}) ->
-    lager:debug("output2pid: ~p\n", [Channel]),
+    lager:debug("output2pid: ~p", [Channel]),
     {reply, to_pid(Channel, OList), State};
 handle_call({input2outputs, Label}, _From, 
 	    State=#state {input_rules = IList}) ->
-    lager:debug("input2outputs: ~p\n", [Label]),
+    lager:debug("input2outputs: ~p", [Label]),
     {reply, input2outputs(Label, IList), State};
 handle_call({input2output_pids, Label}, _From, 
 	    State=#state {input_rules = IList, out_list = OList}) ->
-    lager:debug("input2output_pids: ~p\n", [Label]),
+    lager:debug("input2output_pids: ~p", [Label]),
     case input2outputs(Label, IList) of
 	List when is_list(List) ->
 	    Reply = [to_pid(V, OList) || {K,V} <- List, K =:= channel],
@@ -461,7 +461,7 @@ handle_call({input2output_pids, Label}, _From,
     end;
 handle_call({digital_event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
-    lager:debug("event_and_transmit: ~p\n", [Label]),
+    lager:debug("event_and_transmit: ~p", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
 	{#int_event {signal = (#hex_signal {chan = LChan,
 					    type = ?HEX_ALARM_CNFRM})}, 1}
@@ -488,7 +488,7 @@ handle_call({digital_event_and_transmit, Label, Value}, _From,
     end;
 handle_call({analog_event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
-    lager:debug("analog_event_and_transmit: ~p\n", [Label]),
+    lager:debug("analog_event_and_transmit: ~p", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
 	{#int_event {signal = (#hex_signal {chan = LChan,
 					    type = ?HEX_ALARM_CNFRM})}, 1}
@@ -500,13 +500,16 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
 		     alarm = Alarm}, 1}
 	  when Alarm > 0 ->
+	    lager:debug(" ~p alarm confirm", [Label]),
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
 	    alarm_confirm(Label, Signal1, State),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{#int_event {signal = Signal},_} ->
+	    lager:debug(" ~p run transmit", [Label]),
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
 	    run_transmit(Signal1, State#state.transmit_rules),
+	    lager:debug(" ~p run event", [Label]),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
 	{false, _} ->
@@ -515,7 +518,7 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
     end;
 handle_call({encoder_event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
-    lager:debug("encoder_event_and_transmit: ~p\n", [Label]),
+    lager:debug("encoder_event_and_transmit: ~p", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
 	{#int_event {signal = (#hex_signal {chan = LChan,
 					    type = ?HEX_ALARM_CNFRM})}, 1}
@@ -542,7 +545,7 @@ handle_call({encoder_event_and_transmit, Label, Value}, _From,
     end;
 handle_call({feed_event_and_transmit, Label, Value}, _From, 
 	    State=#state {evt_list = EList}) ->
-    lager:debug("feed_event_and_transmit: ~p\n", [Label]),
+    lager:debug("feed_event_and_transmit: ~p", [Label]),
     case {lists:keyfind(Label, #int_event.label, EList), Value} of
 	{#int_event {signal = (#hex_signal {chan = LChan,
 					    type = ?HEX_ALARM_CNFRM})}, 1}
@@ -562,7 +565,7 @@ handle_call({feed_event_and_transmit, Label, Value}, _From,
     end;
 handle_call({alarm_confirm, Label}, _From, 
 	    State=#state {evt_list = EList}) ->
-    lager:debug("alarm_confirm: ~p\n", [Label]),
+    lager:debug("alarm_confirm: ~p", [Label]),
     case lists:keyfind(Label, #int_event.label, EList) of
 	#int_event {signal = (Signal=#hex_signal {type = ?HEX_ALARM_CNFRM,
 						  chan = LChan}), 
@@ -591,7 +594,7 @@ handle_call(dump_map, _From, State) ->
     Map = State#state.map,
     lists:foreach(
       fun(M) ->
-	      io:format("~6.16.0B:~3w ~p\n", [M#map_item.nodeid,
+	      io:format("~6.16.0B:~3w ~p", [M#map_item.nodeid,
 					      M#map_item.channel,
 					      M#map_item.label])
       end, lists:sort(fun(A, B) ->
@@ -619,12 +622,12 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({event,Signal=#hex_signal{},Data}, State) ->
-    lager:debug("event: ~p data=~p\n", [Signal,Data]),
+    lager:debug("event: ~p data=~p", [Signal,Data]),
     NewState = run_event(Signal, Data, State#state.input_rules, State),
     {noreply, NewState};
 
 handle_cast({transmit,Signal=#hex_signal{}}, State) ->
-    lager:debug("transmit: ~p\n", [Signal]),
+    lager:debug("transmit: ~p", [Signal]),
     run_transmit(Signal, State#state.transmit_rules),
     {noreply, State};
 
@@ -746,7 +749,7 @@ reload({file,File}, State) ->
 	    rescan(Config, File, self(), State);
 	Error={error,Reason} ->
 	    io:format("~s: file error:  ~p\n", [File,Reason]),
-	    lager:error("error loading file ~s\n~p", [File,Reason]),
+	    lager:error("error loading file ~s~p", [File,Reason]),
 	    Error
     end;
 reload(Config, State) ->
@@ -1028,6 +1031,7 @@ run_event_(Signal, Data, [Rule|Rules], State) ->
 	    lager:debug("signal match ~p ~p", [Type, Value]),
 	    case active(Rule#hex_input.flags) of
 		true ->
+		    lager:debug("active"),
 		    Src = Signal#hex_signal.source,
 		    V = {Type, Value, Src},
 		    input(Rule#hex_input.label, V),
@@ -1131,7 +1135,7 @@ run_output_add(_LId, _LChan, _Signal, [], State) ->
 run_output_add(RId, RChan, Label, State=#state{map = Map}) ->
     case find_map_item(Map, Label, RId , RChan) of
 	{true,_M} -> 
-	    lager:debug("output-add, already mapped: ~8.16.0B:~3w ~p\n", 
+	    lager:debug("output-add, already mapped: ~8.16.0B:~3w ~p", 
 		 [_M#map_item.nodeid,
 		  _M#map_item.channel,
 		  _M#map_item.label]),
@@ -1395,7 +1399,7 @@ inform_subscribers(Msg, [#subscriber {pid = Pid, cb = CB, options=Opts} | Subs])
 
 match_subscriber(Options, MatchOptions) ->
     R = match_options(Options, MatchOptions),
-    lager:debug("match ~p with ~p = ~p\n", [Options, MatchOptions, R]),
+    lager:debug("match ~p with ~p = ~p", [Options, MatchOptions, R]),
     R.
 
 match_options([{Key,Value}|Ks], MatchOptions) ->
@@ -1477,6 +1481,7 @@ run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
 run_transmit_(Signal, [Rule|Rules]) ->
     case match_pattern(Signal, <<>>, Rule#hex_transmit.signal) of
 	{true,_Type,_Value} ->
+	    lager:debug(" ~p pattern match", [Signal]),
 	    App = Rule#hex_transmit.app,
 	    App:transmit(Signal, Rule#hex_transmit.flags),
 	    run_transmit_(Signal, Rules);
@@ -1537,7 +1542,7 @@ match_pattern(Sig, Data, Pat) when is_record(Sig, hex_signal),
     case match_value(Pat#hex_bin_pattern.id, Sig#hex_signal.id) of
 	true ->
 	    R = match_bin_pattern(Data, Pat#hex_bin_pattern.bin, []),
-	    lager:debug("match bin pattern ~p / ~p = ~p\n",
+	    lager:debug("match bin pattern ~p / ~p = ~p",
 			[Data, Pat#hex_bin_pattern.bin, R]),
 	    R;
 	false ->
