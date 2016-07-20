@@ -13,6 +13,7 @@
 	 foldl/3, foldr/3, foldbl/3, foldbr/3,
 	 depth_first/3, breadth_first/3]).
 -export([enql/3, enqr/3]).
+-export([dump/1]).
 
 -define(QUEUE_T(), term()).  %% R15 !
 %% -define(QUEUE_T, quque:queue()).
@@ -273,3 +274,12 @@ join([],_S) -> [];
 join([A],_S) -> [A];
 join([A|As],S) -> [A,S|join(As,S)].
 
+%% dump
+dump(Table) ->
+    dump_(Table,first(Table)).
+
+dump_(_Table, '$end_of_table') ->
+    ok;
+dump_(Table, Key) ->
+    io:format("~p\n", [Key]),
+    dump_(Table,next(Table,Key)).
