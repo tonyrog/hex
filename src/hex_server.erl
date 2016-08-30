@@ -1304,16 +1304,25 @@ event_alarm(Label, Alarm, [E | Events], Acc, Subs) ->
 
 alarm_confirm(Label, #hex_signal{id = Id, chan = Chan}, 
 	      State=#state {map = Map}) ->
-    case lists:keyfind(Label, #map_item.label, Map) of
-	#map_item{nodeid = XNodeId, channel = Channel} ->
-	    NodeId = clean(XNodeId),
-	    Confirm = #hex_signal {id = Id,
-				   chan = Chan,
-				   type = ?HEX_ALARM_CNFRM,
-				   value = (NodeId bsl 8) bor Channel,
-				   source = {event,Label}},
-	    run_transmit(Confirm, State#state.transmit_rules);
-	false ->
+    case 
+	lists:foldl(
+	  fun(#map_item{label = L, nodeid = XNodeId, channel = Channel}, Acc) 
+		when L =:= Label ->
+		  NodeId = clean(XNodeId),
+		  Confirm = #hex_signal {id = Id,
+					 chan = Chan,
+					 type = ?HEX_ALARM_CNFRM,
+					 value = (NodeId bsl 8) bor Channel,
+					 source = {event,Label}},
+		  run_transmit(Confirm, State#state.transmit_rules),
+		  [{NodeId, Channel} | Acc];
+	     (_I, Acc) ->
+		  Acc
+	  end, [], Map) of
+	[_I | _Rest] = _List ->
+	    %% At least one item found
+	    lager:debug("alarm_confirm sent for ~p", [_List]);
+	[] ->
 	    lager:warning("alarm confirm for unmapped item ~p",[Label])
     end.
 
