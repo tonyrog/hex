@@ -578,7 +578,7 @@ handle_call({alarm_confirm, Label}, _From,
 	    alarm_confirm(Label, Signal#hex_signal {chan = 0}, State),
 	    {reply, ok, State};
 	#int_event {signal = Signal, alarm = Alarm} ->
-	    if Alarm =:= 0 -> lager:warning("no knnown alarm for ~p", [Label]);
+	    if Alarm =:= 0 -> lager:warning("no known alarm for ~p", [Label]);
 	       true -> ok
 	    end,
 	    alarm_confirm(Label, Signal, State),
