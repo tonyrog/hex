@@ -68,14 +68,18 @@ debug() ->
     start_all(ale),
     ale:debug_gl(hex_output).
 
-
 start() ->
     start_all(hex).
 
 %% utility since application:ensure_all_started is not present in R15
 %% this must be used for now.
 start_all(App) when is_atom(App) ->
-    each_application_([App], [], temporary);
+    try application:ensure_all_started(App)
+    catch
+	%% Old OTP version
+	error:undef ->
+	    each_application_([App], [], temporary)
+    end;
 start_all(Apps) when is_list(Apps) ->
     each_application_(Apps, [], temporary).
 
