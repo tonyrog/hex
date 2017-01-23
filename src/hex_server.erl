@@ -595,8 +595,8 @@ handle_call(dump_map, _From, State) ->
     lists:foreach(
       fun(M) ->
 	      io:format("~6.16.0B:~3w ~p", [M#map_item.nodeid,
-					      M#map_item.channel,
-					      M#map_item.label])
+					    M#map_item.channel,
+					    M#map_item.label])
       end, lists:sort(fun(A, B) ->
 			      An = A#map_item.nodeid,
 			      Bn = B#map_item.nodeid,
@@ -1522,12 +1522,14 @@ match_pattern(Sig, Pat) ->
 
 match_pattern(Sig, _Data, Pat) when is_record(Sig, hex_signal),
 				    is_record(Pat, hex_pattern) ->
-    case match_value(Pat#hex_pattern.id,Sig#hex_signal.id) andalso
+     case match_value(Pat#hex_pattern.id,Sig#hex_signal.id) andalso
 	match_value(Pat#hex_pattern.chan,Sig#hex_signal.chan) andalso
 	match_value(Pat#hex_pattern.type, Sig#hex_signal.type) of
 	true ->
+	     lager:debug("signal match ~p ", [Sig]),
 	    case match_value(Pat#hex_pattern.value,Sig#hex_signal.value) of
 		true ->
+		    lager:debug("value match ~p ", [Sig#hex_signal.value]),
 		    case Sig#hex_signal.type of
 			?HEX_DIGITAL ->
 			    {true, digital, Sig#hex_signal.value};
