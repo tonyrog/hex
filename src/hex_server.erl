@@ -774,7 +774,7 @@ rescan(Config, File, Owner, State) ->
 		 "---------------------\n"),
 	    {ok, State4#state { input_rules = In }};
 	Error={error,Reason} ->
-	    io:format("config error ~p\n", [Reason]),
+	    io:format("~p: config error ~p\n", [?MODULE, Reason]),
 	    lager:error("error config file ~s, ~p", [File,Reason]),
 	    Error
     end.
