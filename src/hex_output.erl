@@ -59,6 +59,7 @@
 -type core_var() :: atom() | integer().
 
 -record(var, {
+	  init     :: core_var(),
 	  in       :: core_var(),
 	  an       :: core_var(),
 	  out      :: core_var(),
@@ -329,7 +330,7 @@ init({Flags,Actions0}) ->
     Targets0 = dict:new(),
 
     %% "standard" core variables
-    {[Var_in,Var_an,Var_ena,Var_out,
+    {[Var_init,Var_in,Var_an,Var_ena,Var_out,
       Var_low,Var_high,Var_inhibit,
       Var_delay,Var_rampup,Var_sustain,Var_rampdown,
       Var_deact,Var_wait,Var_repeat,Var_feedback,Var_transmit,
@@ -337,7 +338,8 @@ init({Flags,Actions0}) ->
       Var_output,Var_enabled
      ],Core1,Targets1} =
 	install_variables(
-	  [{in,0},
+	  [{init,1},
+	   {in,0},
 	   {an,0},
 	   {ena,0},
 	   {out,0},
@@ -363,6 +365,7 @@ init({Flags,Actions0}) ->
 	  Core0, Targets0, []),
 
     Var = #var {
+	     init=Var_init,
 	     in=Var_in,
 	     an=Var_an,
 	     ena=Var_ena,
@@ -394,10 +397,19 @@ init({Flags,Actions0}) ->
     %% fixme: order of install actions and set_options?
     case set_options(Flags, State0) of
 	{ok, State} ->
+	    %% init=1 & eval 
 	    Core2 = hex_core:eval(State#state.core),
 	    A = min(?CORE_VALUE(State,Core2,active), 1),
 	    transmit_active(A, State),
 	    E = min(?CORE_VALUE(State,Core2,enable), 1),
+	    I0 = ?CORE_VALUE(State,Core2,init),
+
+	    %% Now set init=0 
+	    {_,Core3} = hex_core:set_value(init,0,Core2),
+	    Core4 = hex_core:eval(Core3),
+	    I1 = ?CORE_VALUE(State,Core4,init),
+	    io:format("INIT=~w,INIT'=~w,E=~w,A=~w\n", [I0,I1,E,A]),
+
 	    if E =:= 0 ->
 		    lager:debug("initial state off"),
 		    State2 = State#state { enable_value=E,
@@ -405,14 +417,14 @@ init({Flags,Actions0}) ->
 					   deactivate=true,
 					   core=Core2 },
 		    {_,_,State3} = state_off(init, State2),
-		    {ok, state_off, State3};
+		    {ok, state_off, State3#state { core=Core4 }};
 	       E =:= 1 ->
 		    lager:debug("initial state on"),
 		    State2 = do_enabled(1, State#state { enable_value=E,
 							 active_value=A,
 							 core=Core2 }),
 		    {_, _, State3} = state_on(init, State2),
-		    {ok, state_on, State3}
+		    {ok, state_on, State3#state { core=Core4 }}
 	    end;
 	Error ->
 	    {stop, Error}
