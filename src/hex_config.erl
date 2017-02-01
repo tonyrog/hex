@@ -209,21 +209,25 @@ is_output(_) ->
     false.
 
 %% translate event pattern into internal form
-hex_pattern({ID,Chan,Type,Value}) ->
+hex_pattern({ID,Chan,Type,Value} = _Pattern) ->
     try #hex_pattern { id = pattern(ID),
 		       chan = pattern(Chan),
 		       type = pattern(Type),
 		       value = pattern(Value) } of
 	P=#hex_pattern{} -> {ok, P}
     catch
-	error:_ -> {error,bad_pattern}
+	error:_ ->
+	    lager:error("bad pattern for ~p",[_Pattern]),
+	    {error,bad_pattern}
     end;
-hex_pattern({ID,BinPat}) ->
+hex_pattern({ID,BinPat} = _Pattern) ->
     try #hex_bin_pattern { id = pattern(ID),
 			   bin = bin_pattern(BinPat) } of
 	P=#hex_bin_pattern{} -> {ok, P}
     catch
-	error:_ -> {error,bad_pattern}
+	error:_ ->
+	    lager:error("bad pattern for ~p",[_Pattern]),
+	    {error,bad_pattern}
     end.
 
 bin_pattern([{Size,Bits}|BinPat]) when is_integer(Size), Size > 0,
