@@ -402,13 +402,13 @@ init({Flags,Actions0}) ->
 	    A = min(?CORE_VALUE(State,Core2,active), 1),
 	    transmit_active(A, State),
 	    E = min(?CORE_VALUE(State,Core2,enable), 1),
-	    I0 = ?CORE_VALUE(State,Core2,init),
+	    %%I0 = ?CORE_VALUE(State,Core2,init),
 
 	    %% Now set init=0 
 	    {_,Core3} = hex_core:set_value(init,0,Core2),
 	    Core4 = hex_core:eval(Core3),
-	    I1 = ?CORE_VALUE(State,Core4,init),
-	    io:format("INIT=~w,INIT'=~w,E=~w,A=~w\n", [I0,I1,E,A]),
+	    %%I1 = ?CORE_VALUE(State,Core4,init),
+	    %% io:format("INIT=~w,INIT'=~w,E=~w,A=~w\n", [I0,I1,E,A]),
 
 	    if E =:= 0 ->
 		    lager:debug("initial state off"),
