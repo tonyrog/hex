@@ -470,10 +470,13 @@ handle_call({digital_event_and_transmit, Label, Value}, _From,
 	    %% a power_zone alarm, ignore
 	    lager:debug("channel ~p not possible", [LChan]),
 	    {reply, ok, State};
-	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
+	{#int_event {signal = (Signal=#hex_signal {type = Type}), 
 		     alarm = Alarm}, 1}
-	  when Alarm > 0 ->
+	  when (Alarm > 0) andalso 
+	       (Type =:= ?HEX_DIGITAL orelse Type =:= ?HEX_ANALOG) ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_DIGITAL},
+	    lager:debug("alarm present for ~p, sending confirm ~s",
+			[Label, format_signal(Signal1)]),
 	    alarm_confirm(Label, Signal1, State),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
@@ -497,11 +500,13 @@ handle_call({analog_event_and_transmit, Label, Value}, _From,
 	    %% a power_zone alarm, ignore
 	    lager:debug("channel ~p not possible", [LChan]),
 	    {reply, ok, State};
-	{#int_event {signal = (Signal=#hex_signal {type = ?HEX_DIGITAL}), 
+	{#int_event {signal = (Signal=#hex_signal {type = Type}), 
 		     alarm = Alarm}, 1}
-	  when Alarm > 0 ->
-	    lager:debug(" ~p alarm confirm", [Label]),
+	  when (Alarm > 0) andalso 
+	       (Type =:= ?HEX_DIGITAL orelse Type =:= ?HEX_ANALOG) ->
 	    Signal1 = Signal#hex_signal {value = Value, type = ?HEX_ANALOG},
+	    lager:debug("alarm present for ~p, sending confirm ~s",
+			[Label, format_signal(Signal1)]),
 	    alarm_confirm(Label, Signal1, State),
 	    NewState = run_event(Signal1, <<>>, State#state.input_rules, State),
 	    {reply, ok, NewState};
@@ -594,9 +599,9 @@ handle_call(dump_map, _From, State) ->
     Map = State#state.map,
     lists:foreach(
       fun(M) ->
-	      io:format("~6.16.0B:~3w ~p", [M#map_item.nodeid,
-					    M#map_item.channel,
-					    M#map_item.label])
+	      io:format("~6.16.0B:~3w ~p~n", [M#map_item.nodeid,
+					      M#map_item.channel,
+					      M#map_item.label])
       end, lists:sort(fun(A, B) ->
 			      An = A#map_item.nodeid,
 			      Bn = B#map_item.nodeid,
@@ -622,7 +627,7 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({event,Signal=#hex_signal{},Data}, State) ->
-    lager:debug("event: ~p data=~p", [Signal,Data]),
+    lager:debug("event: ~s data=~p", [format_signal(Signal),Data]),
     NewState = run_event(Signal, Data, State#state.input_rules, State),
     {noreply, NewState};
 
@@ -1054,7 +1059,7 @@ active([_Flag | Flags]) -> active(Flags).
 
 run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
     lager:debug("run_power_on: ~p", [Signal]),
-    State1 = reset(simplify(RId), Map, State, []),
+    State1 = reset(cobid2nodeid(RId), Map, State, []),
     State2 = add_node(Signal, State1),     
     add_outputs(Signal, Rules, State2).
 
@@ -1062,7 +1067,7 @@ add_node(Signal=#hex_signal {id = RId, chan = 0},
 	 State=#state{evt_list = Events}) ->
     lager:debug("add_node: ~.16B ", [RId]),
     %% Node has channel 0
-    run_output_add(clean(hex:make_self(State#state.nodeid)), simplify(RId), 
+    run_output_add(clean(hex:make_self(State#state.nodeid)), cobid2nodeid(RId), 
 		   Signal, Events, State).
 	    
 add_outputs(Signal, [Rule|Rules], State) ->
@@ -1122,7 +1127,7 @@ run_output_add(LId, LChan, Signal=#hex_signal {id = RId, chan = RChan},
     SigNodeId = clean(S#hex_signal.id),
     if LId =:= SigNodeId,
        LChan =:= S#hex_signal.chan ->
- 	    NewState = run_output_add(simplify(RId), RChan, Label, State),
+ 	    NewState = run_output_add(cobid2nodeid(RId), RChan, Label, State),
 	    run_output_add(LId, LChan, Signal, Events, NewState);
        true ->
 	    run_output_add(LId, LChan, Signal, Events, State)
@@ -1171,7 +1176,7 @@ run_output_del(Id, LChan, Signal=#hex_signal {id = RId, chan = RChan},
     SigNodeId = clean(S#hex_signal.id) ,
     if Id =:= SigNodeId,
        LChan =:= S#hex_signal.chan ->
-	    NewState = run_output_del(simplify(RId), RChan, Label, State), 
+	    NewState = run_output_del(cobid2nodeid(RId), RChan, Label, State), 
 	    run_output_del(Id, LChan, Signal, Events, NewState);
        true ->
 	    run_output_del(Id, LChan, Signal, Events, State)
@@ -1197,11 +1202,11 @@ run_output_del(RId, RChan, Label, State=#state{map = Map}) ->
 run_output_action(Action, 
 		  Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 		  State=#state {map = Map}) ->
-    lager:debug("signal ~p", [Signal]),
+    lager:debug("signal ~s", [format_signal(Signal)]),
     ?dbg("~8.16.0B:~3w value=~p, action=~w\n",
 	 [clean(Id), Chan, Value, Action]),
     %%Id = clean(Id0),
-    run_output_action(Action, simplify(Id), Chan, Value, Map, State).
+    run_output_action(Action, cobid2nodeid(Id), Chan, Value, Map, State).
 
 run_output_action(_Action, _Id, _Chan, _Value, [], State) ->
     State;
@@ -1267,8 +1272,8 @@ event_state(E=#int_event {label = Label, app = App, app_flags = AppFlags},
 
 run_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	  State=#state {map = Map}) ->
-    lager:debug("signal ~p", [Signal]),
-    run_alarm(simplify(Id), Chan, Value, Map, State).
+    lager:debug("signal ~s", [format_signal(Signal)]),
+    run_alarm(cobid2nodeid(Id), Chan, Value, Map, State).
 
 run_alarm(Id, Chan, Alarm, 
 	  [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
@@ -1329,7 +1334,7 @@ alarm_confirm(Label, #hex_signal{id = Id, chan = Chan},
 run_alarm_confirm_ack(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
-    run_alarm_confirm_ack(simplify(Id), Chan, Value, Map, State).
+    run_alarm_confirm_ack(cobid2nodeid(Id), Chan, Value, Map, State).
 
 run_alarm_confirm_ack(Id, Chan, Alarm, 
 	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
@@ -1359,7 +1364,7 @@ event_alarm_confirm_ack(Label, Alarm, [E | Events], Acc, Subs) ->
 run_output_alarm(Signal=#hex_signal {id = Id, chan = Chan, value = Value}, 
 	       State=#state {map = Map}) ->
     lager:debug("signal ~p", [Signal]),
-    run_output_alarm(simplify(Id), Chan, Value, Map, State).
+    run_output_alarm(cobid2nodeid(Id), Chan, Value, Map, State).
 
 run_output_alarm(Id, Chan, AlarmState, 
 	       [#map_item {label = Label, nodeid = Id, channel = Chan} | Map], 
@@ -1490,7 +1495,7 @@ run_transmit(Signal, Rules) when is_record(Signal, hex_signal) ->
 run_transmit_(Signal, [Rule|Rules]) ->
     case match_pattern(Signal, <<>>, Rule#hex_transmit.signal) of
 	{true,_Type,_Value} ->
-	    lager:debug(" ~p pattern match", [Signal]),
+	    lager:debug(" ~s pattern match", [format_signal(Signal)]),
 	    App = Rule#hex_transmit.app,
 	    App:transmit(Signal, Rule#hex_transmit.flags),
 	    run_transmit_(Signal, Rules);
@@ -1512,9 +1517,10 @@ clean(NodeId) ->
     %% When comparing signals
     NodeId band (?HEX_XNODE_ID_MASK bor ?HEX_COBID_EXT).
  
-simplify(NodeId) ->
+cobid2nodeid(Id) ->
     %% When dealing with #map_item.
-    NodeId band 16#ffffff.
+    co_lib:cobid_to_nodeid(Id).
+    %%NodeId band 16#ffffff.
 
 
 match_pattern(Sig, Pat) ->
@@ -1526,9 +1532,9 @@ match_pattern(Sig, _Data, Pat) when is_record(Sig, hex_signal),
 	match_value(Pat#hex_pattern.chan,Sig#hex_signal.chan) andalso
 	match_value(Pat#hex_pattern.type, Sig#hex_signal.type) of
 	true ->
-	     lager:debug("signal match ~p ", [Sig]),
-	    case match_value(Pat#hex_pattern.value,Sig#hex_signal.value) of
-		true ->
+	     lager:debug("signal match ~s ", [format_signal(Sig)]),
+	     case match_value(Pat#hex_pattern.value,Sig#hex_signal.value) of
+		 true ->
 		    lager:debug("value match ~p ", [Sig#hex_signal.value]),
 		    case Sig#hex_signal.type of
 			?HEX_DIGITAL ->
@@ -1656,3 +1662,6 @@ event_value(Var, Env) when is_atom(Var) ->
     proplists:get_value(Var, Env, 0);
 event_value(Value, _Env) ->
     Value.
+
+format_signal(#hex_signal{id = I, chan = C, type = T, source = S}) ->
+    io_lib_format:fwrite("{~.16.0#, ~.16.0#, ~.16.0#, ~p}",[I,C,T,S]).
