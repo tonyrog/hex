@@ -681,7 +681,7 @@ handle_info({inform, Type, Options, _From},
     inform_subscribers(Event, Subs),
     {noreply, State};
 
-handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
+handle_info({'DOWN',Ref,process,Pid,Reason}, State) ->
     case lists:keytake(Ref, 2, State#state.plugin_up) of
 	false ->
 	    case lists:keytake(Ref, #subscriber.mon, State#state.subs) of
@@ -690,19 +690,25 @@ handle_info({'DOWN',Ref,process,Pid,_Reason}, State) ->
 			false ->
 			    {noreply, State};
 			{value, {Pid, Ref}, NewOwners} ->
-			    lager:warning("owner DOWN: ~p reason=~p", 
-					  [Pid,_Reason]),
+			    if Reason =/= shutdown ->
+				    lager:warning("owner DOWN: ~p reason=~p",
+						  [Pid,Reason])
+			    end,
 			    State1 = remove(Pid, State),
 			    ets:delete(State1#state.owner_table, Pid),
 			    {noreply, State1#state {owners = NewOwners}}
 			end;
 		{value, #subscriber {pid = Pid}, NewSubs} ->
-		    lager:warning("subscriber DOWN: ~p reason=~p", 
-				  [Pid,_Reason]),
+		    if Reason =/= shutdown ->
+			    lager:warning("subscriber DOWN: ~p reason=~p",
+					  [Pid,Reason])
+		    end,
 		    {noreply, State#state { subs = NewSubs}}
 	    end;
 	{value,{App,_Ref},PluginUp} ->
-	    lager:warning("plugin DOWN: ~s reason=~p", [App,_Reason]),
+	    if Reason =/= shutdown ->
+		    lager:warning("plugin DOWN: ~s reason=~p", [App,Reason])
+	    end,
 	    PluginDown = [App|State#state.plugin_down],
 	    {noreply, State#state { plugin_up   = PluginUp,
 				    plugin_down = PluginDown }}
