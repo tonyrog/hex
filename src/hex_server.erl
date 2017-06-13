@@ -692,7 +692,8 @@ handle_info({'DOWN',Ref,process,Pid,Reason}, State) ->
 			{value, {Pid, Ref}, NewOwners} ->
 			    if Reason =/= shutdown ->
 				    lager:warning("owner DOWN: ~p reason=~p",
-						  [Pid,Reason])
+						  [Pid,Reason]);
+			       true -> ok
 			    end,
 			    State1 = remove(Pid, State),
 			    ets:delete(State1#state.owner_table, Pid),
@@ -701,13 +702,16 @@ handle_info({'DOWN',Ref,process,Pid,Reason}, State) ->
 		{value, #subscriber {pid = Pid}, NewSubs} ->
 		    if Reason =/= shutdown ->
 			    lager:warning("subscriber DOWN: ~p reason=~p",
-					  [Pid,Reason])
+					  [Pid,Reason]);
+		       true -> ok
 		    end,
 		    {noreply, State#state { subs = NewSubs}}
 	    end;
 	{value,{App,_Ref},PluginUp} ->
 	    if Reason =/= shutdown ->
-		    lager:warning("plugin DOWN: ~s reason=~p", [App,Reason])
+		    lager:warning("plugin DOWN: ~s reason=~p", [App,Reason]);
+	       true ->
+		    ok
 	    end,
 	    PluginDown = [App|State#state.plugin_down],
 	    {noreply, State#state { plugin_up   = PluginUp,
