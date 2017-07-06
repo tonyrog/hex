@@ -1,6 +1,7 @@
+%%% coding: latin-1
 %%%---- BEGIN COPYRIGHT -------------------------------------------------------
 %%%
-%%% Copyright (C) 2007 - 2015, Rogvall Invest AB, <tony@rogvall.se>
+%%% Copyright (C) 2007 - 2017, Rogvall Invest AB, <tony@rogvall.se>
 %%%
 %%% This software is licensed as described in the file COPYRIGHT, which
 %%% you should have received as part of this distribution. The terms
@@ -577,7 +578,7 @@ handle_call({alarm_confirm, Label}, _From,
 		    alarm = Alarm}
 	  when LChan > 254 ->
 	    lager:debug("channel ~p converted to 0", [LChan]),
-	    if Alarm =:= 0 -> lager:warning("no knnown alarm for ~p", [Label]);
+	    if Alarm =:= 0 -> lager:warning("no known alarm for ~p", [Label]);
 	       true -> ok
 	    end,
 	    alarm_confirm(Label, Signal#hex_signal {chan = 0}, State),
@@ -593,24 +594,10 @@ handle_call({alarm_confirm, Label}, _From,
 	    {reply, {error, unknown_event}, State}
     end;
 handle_call(dump, _From, State) ->
-    io:format("State ~p", [State]),
+    dump_state(State),
     {reply, State, State};
-handle_call(dump_map, _From, State) ->
-    Map = State#state.map,
-    lists:foreach(
-      fun(M) ->
-	      io:format("~6.16.0B:~3w ~p~n", [M#map_item.nodeid,
-					      M#map_item.channel,
-					      M#map_item.label])
-      end, lists:sort(fun(A, B) ->
-			      An = A#map_item.nodeid,
-			      Bn = B#map_item.nodeid,
-			      if An < Bn -> true;
-				 An =:= Bn -> 
-				      A#map_item.channel < B#map_item.channel;
-				 true -> false
-			      end
-		      end, Map)),
+handle_call(dump_map, _From, State=#state{map = Map}) ->
+    dump_map(Map),
     {reply, Map, State};
 
 handle_call(_Request, _From, State) ->
@@ -1068,8 +1055,9 @@ active([_Flag | Flags]) -> active(Flags).
     
 
 run_power_on(Signal=#hex_signal {id = RId}, Rules, State=#state{map = Map}) ->
-    lager:debug("run_power_on: ~p", [Signal]),
+    lager:debug("run_power_on: ~s", [format_signal(Signal)]),
     State1 = reset(cobid2nodeid(RId), Map, State, []),
+    lager:debug("run_power_on: after reset", []),
     State2 = add_node(Signal, State1),     
     add_outputs(Signal, Rules, State2).
 
@@ -1077,7 +1065,8 @@ add_node(Signal=#hex_signal {id = RId, chan = 0},
 	 State=#state{evt_list = Events}) ->
     lager:debug("add_node: ~.16B ", [RId]),
     %% Node has channel 0
-    run_output_add(clean(hex:make_self(State#state.nodeid)), cobid2nodeid(RId), 
+    run_output_add(clean(hex:make_self(State#state.nodeid)),
+		   hex:virtual_cc_for_node(cobid2nodeid(RId)),
 		   Signal, Events, State).
 	    
 add_outputs(Signal, [Rule|Rules], State) ->
@@ -1120,7 +1109,7 @@ add_outputs([], _Rid, _Rchan, _State) ->
 
 run_output_add(Signal=#hex_signal {id=_RId, chan=_RChan, value = Value}, 
 	       State=#state {evt_list = EvtList}) ->
-    %% lager:debug("run_output_add: ~p", [Signal]),
+    lager:debug("run_output_add: ~p", [format_signal(Signal)]),
     {Id, Chan} = value2nid(Value),
     ?dbg("~8.16.0B:~3w ~8.16.0B:~w action=~w\n",
 	 [clean(_RId) _RChan, clean(Id), Chan, output_add]),
@@ -1462,6 +1451,7 @@ remove_mapped(Label,Id,Chan,[MapItem|Map],Acc) ->
 
 %% Remove all items on node Id.
 reset(_Id,[],State, NewMap) ->
+    lager:debug("items on ~p removed", [_Id]),
     State#state{map = NewMap};
 reset(Id, [#map_item{nodeid = Id, label = Label} | Map], 
       State=#state{evt_list = Events, subs = Subs}, Acc) ->
@@ -1674,4 +1664,72 @@ event_value(Value, _Env) ->
     Value.
 
 format_signal(#hex_signal{id = I, chan = C, type = T, source = S}) ->
-    io_lib_format:fwrite("{~.16.0#, ~.16.0#, ~.16.0#, ~p}",[I,C,T,S]).
+    io_lib_format:fwrite(
+      "{Node ~.16.0#, Channel ~p, Index ~.16.0#, source ~p}",
+      [I,C,T,S]).
+
+dump_state(State) ->
+    io:format("State\n:", []),
+    io:format("Config ~p\n", [State#state.config]),
+    io:format("NodeId ~p\n", [State#state.nodeid]),
+    io:format("Table ~p\n", [State#state.tab]),
+    io:format("OwnerTable ~p\n", [State#state.owner_table]),
+
+    io:format("Out List\n", []),
+    lists:foreach(
+      fun({Label, Pid}) ->
+	      io:format("~p ~p~n", [Label,Pid])
+      end, State#state.out_list),
+
+    io:format("In List\n", []),
+    lists:foreach(
+      fun({Label, Pid}) ->
+	      io:format("~p ~p~n", [Label,Pid])
+      end, State#state.in_list),
+
+    io:format("Event List\n", []),
+    lists:foreach(
+      fun(E=#int_event{label = Label, signal = Signal}) ->
+	      io:format("~p\n", [E]),
+	      if not is_integer(Label) ->
+		      io:format("     ~p\n", [Label]),
+		      io:format("     ~s\n", [format_signal(Signal)]);
+		 true ->
+		      do_nothing
+	      end
+      end, State#state.evt_list),
+
+    dump_map(State#state.map),
+
+    io:format("Transmit Rules\n", []),
+    lists:foreach(
+      fun(T) ->
+	      io:format("~p ~n", [T])
+      end, State#state.transmit_rules),
+
+    io:format("Input Rules\n", []),
+    lists:foreach(
+      fun(I) ->
+	      io:format("~p ~n", [I])
+      end, State#state.input_rules),
+
+    io:format("Plugin up ~p\n", [State#state.plugin_up]),
+    io:format("Plugin down ~p\n", [State#state.plugin_down]),
+    io:format("Subscribers ~p\n", [State#state.subs]),
+    io:format("Owners ~p\n", [State#state.owners]).
+
+dump_map(Map) ->
+    lists:foreach(
+      fun(M) ->
+	      io:format("~6.16.0B:~3w ~p~n", [M#map_item.nodeid,
+					      M#map_item.channel,
+					      M#map_item.label])
+      end, lists:sort(fun(A, B) ->
+			      An = A#map_item.nodeid,
+			      Bn = B#map_item.nodeid,
+			      if An < Bn -> true;
+				 An =:= Bn ->
+				      A#map_item.channel < B#map_item.channel;
+				 true -> false
+			      end
+		      end, Map)).

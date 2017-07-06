@@ -1,6 +1,7 @@
+%%% coding: latin-1
 %%%---- BEGIN COPYRIGHT -------------------------------------------------------
 %%%
-%%% Copyright (C) 2007 - 2014, Rogvall Invest AB, <tony@rogvall.se>
+%%% Copyright (C) 2007 - 2017, Rogvall Invest AB, <tony@rogvall.se>
 %%%
 %%% This software is licensed as described in the file COPYRIGHT, which
 %%% you should have received as part of this distribution. The terms
@@ -15,6 +16,7 @@
 %%%
 %%%---- END COPYRIGHT ---------------------------------------------------------
 %%% @author Tony Rogvall <tony@rogvall.se>
+%%% @author Malotte Westman Lönne <malotte@malotte.net>
 %%% @doc
 %%%    Start
 %%% @end
@@ -50,6 +52,9 @@
 -export([set_signal_value/2]).
 -export([input_active/2]).
 -export([internal_label/1, external_label/1]).
+
+%% Used by seaz_ws_srv for seazone nodes
+-export([virtual_cc_for_node/1]).
 
 %% Debug API
 -export([debug_input/1]).
@@ -265,6 +270,15 @@ signal(Id, Channel, Type, Value, Source) ->
 
 set_signal_value(Signal, Value) ->
     Signal#hex_signal{value = Value}.
+
+%% Special handling for seazone nodes
+%% They don't have any control channel but since they can report alarms
+%% they must be mapped any as if they do.
+%% Control channels must be unique so we use node id.
+%% However a short node id can be the same as a "real" control channel.
+%% Thus we add an offset for them.
+virtual_cc_for_node(Id) when Id > 16#ffff -> Id;
+virtual_cc_for_node(Id) -> Id + 16#ffff.
 
 %%
 %% Input/Output debug
