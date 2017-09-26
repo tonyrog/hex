@@ -1109,7 +1109,7 @@ add_outputs([], _Rid, _Rchan, _State) ->
 
 run_output_add(Signal=#hex_signal {id=_RId, chan=_RChan, value = Value}, 
 	       State=#state {evt_list = EvtList}) ->
-    lager:debug("run_output_add: ~p", [format_signal(Signal)]),
+    lager:debug("run_output_add: ~s", [format_signal(Signal)]),
     {Id, Chan} = value2nid(Value),
     ?dbg("~8.16.0B:~3w ~8.16.0B:~w action=~w\n",
 	 [clean(_RId) _RChan, clean(Id), Chan, output_add]),
