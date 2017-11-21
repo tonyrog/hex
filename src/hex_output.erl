@@ -1176,15 +1176,21 @@ do_target(_Type, Name, _Vo, Value, Src, State) ->
 
 target_env(State) ->
     Core = State#state.core,
-    dict:fold(fun(Ti,To,Acc) ->
-		      case hex_core:is_changed(To,Core) of
-			  true ->
-			      Val = hex_core:value(To,Core),
-			      [{Ti,Val}|Acc];
-			  false ->
-			      Acc
-		      end
-	      end, [], State#state.targets).
+    Env =
+	dict:fold(fun(Ti,To,Acc) ->
+			  case hex_core:is_changed(To,Core) of
+			      true ->
+				  Val = hex_core:value(To,Core),
+				  [{Ti,Val}|Acc];
+			      false ->
+				  Acc
+			  end
+		  end, [], State#state.targets),
+    %% make sure input value is always in the env output
+    case lists:keymember(in, 1, Env) of
+	true -> Env;
+	false -> [{in,hex_core:value(in,Core)}|Env]
+    end.
 
 do_enabled(Value, State) ->
     Core1 = hex_core:set_values([{State#state.out_name,Value},
